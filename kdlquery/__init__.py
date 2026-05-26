@@ -26,6 +26,7 @@ from .reader import (
     parse_into,
 )
 from .document import KdlDocument
+from .selector import SelectorError
 from .dict_reader import DictReader
 
 
@@ -77,5 +78,6 @@ __all__ = [
     "Walker",
     "parse_into",
     "parse",
+    "SelectorError",
     "DictReader",
 ]

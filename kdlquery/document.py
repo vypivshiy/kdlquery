@@ -146,9 +146,33 @@ class KdlDocument:
             List of matching nodes in document order.
 
         Raises:
-            NotImplementedError: CSS3 selectors are not yet implemented.
+            SelectorError: If the selector syntax is invalid.
         """
-        raise NotImplementedError("CSS3 selectors not yet implemented")
+        from .selector import SelectorLexer, SelectorMatcher, SelectorParser
+
+        tokens = SelectorLexer(selector).tokenize()
+        sel = SelectorParser(tokens).parse()
+        return SelectorMatcher(self).match(sel)
+
+    def select_one(self, selector: str) -> KdlNode | None:
+        """Return the first node matching a selector, or None.
+
+        Lazily evaluates — stops iteration at the first match.
+
+        Args:
+            selector: A CSS3-compatible selector string.
+
+        Returns:
+            The first matching node in document order, or ``None``.
+
+        Raises:
+            SelectorError: If the selector syntax is invalid.
+        """
+        from .selector import SelectorLexer, SelectorMatcher, SelectorParser
+
+        tokens = SelectorLexer(selector).tokenize()
+        sel = SelectorParser(tokens).parse()
+        return SelectorMatcher(self).match_one(sel)
 
 
 __all__ = [

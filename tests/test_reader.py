@@ -190,9 +190,9 @@ top-level 42
         names = [n.name for n in document.iter_nodes()]
         assert names == ["root", "child-a", "grandchild", "child-b", "top-level"]
 
-    def test_select_not_implemented(self, document):
-        with pytest.raises(NotImplementedError, match="CSS3"):
-            document.select("root")
+    def test_select_basic(self, document):
+        results = document.select("grandchild")
+        assert all(n.name == "grandchild" for n in results)
 
 
 # ---------------------------------------------------------------------------
