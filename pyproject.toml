@@ -1,0 +1,18 @@
+[project]
+name = "kdlquery"
+version = "0.1.0"
+description = "KDL 2.0 query tool"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "mypy>=2.1.0",
+    "pytest>=9.0.3",
+    "ruff>=0.15.14",
+]
