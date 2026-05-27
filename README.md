@@ -174,6 +174,10 @@ doc.select_one("server[tls=#true]")
 
 ### Node selectors
 
+>[!NOTE]
+> This selector implementation intentionally diverges from the [official KDL Query draft](https://github.com/kdl-org/kdl/blob/main/QUERY-SPEC.md) and closely mirrors CSS3 syntax.  
+> Should the official query language be finalized and stabilized, a compatibility port to this project may be considered.
+
 `KdlNode` also has `select()` and `select_one()` for querying within a node's children subtree. This is useful when you already have a reference to a specific node and want to drill down.
 
 Selectors on `KdlNode` are scoped to descendants — they cannot access parent or root nodes.
