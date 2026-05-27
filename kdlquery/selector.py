@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import functools
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Iterator, NamedTuple
@@ -507,14 +508,16 @@ class SelectorMatcher:
     def match(self, selector: SelectorList) -> list[KdlNode]:
         results: list[KdlNode] = []
         seen: set[int] = set()
-        for complex_sel in selector.selectors:
-            for node in self._doc.iter_nodes():
-                nid = id(node)
-                if nid in seen:
-                    continue
+        selectors = selector.selectors
+        for node in self._doc.iter_nodes():
+            nid = id(node)
+            if nid in seen:
+                continue
+            for complex_sel in selectors:
                 if self._matches_complex(node, complex_sel):
                     seen.add(nid)
                     results.append(node)
+                    break
         return results
 
     def match_one(self, selector: SelectorList) -> KdlNode | None:
@@ -689,9 +692,9 @@ class SelectorMatcher:
         sel: ComplexSelector,
     ) -> bool:
         if initial == Combinator.CHILD:
-            candidates: list[KdlNode] = list(node.children)
+            candidates: Iterator[KdlNode] = iter(node.children)
         else:
-            candidates = list(self._iter_subtree(node))
+            candidates = self._iter_subtree(node)
 
         if not sel.combinators:
             return any(self._matches_compound(c, sel.compounds[0]) for c in candidates)
@@ -723,6 +726,12 @@ class SelectorMatcher:
             return pos == nth.b
         diff = pos - nth.b
         return diff >= 0 and diff % nth.a == 0
+
+
+@functools.lru_cache(maxsize=256)
+def _parse_selector(selector: str) -> SelectorList:
+    tokens = SelectorLexer(selector).tokenize()
+    return SelectorParser(tokens).parse()
 
 
 __all__ = [

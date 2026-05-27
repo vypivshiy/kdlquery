@@ -148,10 +148,9 @@ class KdlDocument:
         Raises:
             SelectorError: If the selector syntax is invalid.
         """
-        from .selector import SelectorLexer, SelectorMatcher, SelectorParser
+        from .selector import SelectorMatcher, _parse_selector
 
-        tokens = SelectorLexer(selector).tokenize()
-        sel = SelectorParser(tokens).parse()
+        sel = _parse_selector(selector)
         return SelectorMatcher(self).match(sel)
 
     def select_one(self, selector: str) -> KdlNode | None:
@@ -168,10 +167,9 @@ class KdlDocument:
         Raises:
             SelectorError: If the selector syntax is invalid.
         """
-        from .selector import SelectorLexer, SelectorMatcher, SelectorParser
+        from .selector import SelectorMatcher, _parse_selector
 
-        tokens = SelectorLexer(selector).tokenize()
-        sel = SelectorParser(tokens).parse()
+        sel = _parse_selector(selector)
         return SelectorMatcher(self).match_one(sel)
 
 
