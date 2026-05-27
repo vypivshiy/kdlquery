@@ -1,6 +1,6 @@
 [project]
 name = "kdlquery"
-version = "0.1.0"
+version = "1.0.0"
 description = "KDL 2.0 query tool"
 readme = "README.md"
 requires-python = ">=3.10"
