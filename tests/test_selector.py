@@ -517,6 +517,16 @@ class TestNot:
         r = doc.select('route:not([0="GET"])')
         assert _first_args(r) == ["POST"]
 
+    def test_not_comma_two_names(self, doc: KdlDocument) -> None:
+        r = doc.select("app > *:not(server, router)")
+        names = _names(r)
+        assert "server" not in names
+        assert "router" not in names
+
+    def test_not_comma_with_pseudo(self, doc: KdlDocument) -> None:
+        r = doc.select("plugin:not(:empty, [enabled=#false])")
+        assert _first_args(r) == ["auth", "cache"]
+
 
 # ---------------------------------------------------------------------------
 # :has()
@@ -563,6 +573,18 @@ class TestHas:
     def test_router_has_child_route_auth(self, doc: KdlDocument) -> None:
         r = doc.select("router:has(> route[auth=#true])")
         assert _names(r) == ["router"]
+
+    def test_has_comma_two_names(self, doc: KdlDocument) -> None:
+        r = doc.select("server:has(host, timeout)")
+        assert _first_args(r) == ["primary", "replica"]
+
+    def test_has_comma_child_combinators(self, doc: KdlDocument) -> None:
+        r = doc.select("app:has(> server, > router)")
+        assert _names(r) == ["app"]
+
+    def test_has_comma_mixed_combinators(self, doc: KdlDocument) -> None:
+        r = doc.select("plugin:has(> secret, backend)")
+        assert _first_args(r) == ["auth", "cache"]
 
 
 # ---------------------------------------------------------------------------

@@ -100,9 +100,8 @@ class NthExpr:
 class PseudoClass:
     name: str
     nth: NthExpr | None = None
-    not_compound: CompoundSelector | None = None
-    has_initial: Combinator | None = None
-    has_selector: ComplexSelector | None = None
+    not_selectors: tuple[ComplexSelector, ...] = ()
+    has_selectors: tuple[tuple[Combinator | None, ComplexSelector], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -481,17 +480,29 @@ class SelectorParser:
         name_tok = self._expect(_TokType.IDENT)
         name = name_tok.value
         nth: NthExpr | None = None
-        not_compound: CompoundSelector | None = None
-        has_initial: Combinator | None = None
-        has_selector: ComplexSelector | None = None
+        not_selectors: tuple[ComplexSelector, ...] = ()
+        has_selectors: tuple[tuple[Combinator | None, ComplexSelector], ...] = ()
 
         if self._cur().typ == _TokType.LPAREN:
             self._advance()
             if name == "not":
-                not_compound = self._compound()
+                first = self._complex()
+                ns = [first]
+                while self._cur().typ == _TokType.COMMA:
+                    self._advance()
+                    ns.append(self._complex())
+                not_selectors = tuple(ns)
             elif name == "has":
-                has_initial = self._try_has_initial_combinator()
-                has_selector = self._complex()
+                hs: list[tuple[Combinator | None, ComplexSelector]] = []
+                initial = self._try_has_initial_combinator()
+                sel = self._complex()
+                hs.append((initial, sel))
+                while self._cur().typ == _TokType.COMMA:
+                    self._advance()
+                    initial = self._try_has_initial_combinator()
+                    sel = self._complex()
+                    hs.append((initial, sel))
+                has_selectors = tuple(hs)
             else:
                 nth = self._nth_expr()
             self._expect(_TokType.RPAREN)
@@ -499,9 +510,8 @@ class SelectorParser:
         return PseudoClass(
             name=name,
             nth=nth,
-            not_compound=not_compound,
-            has_initial=has_initial,
-            has_selector=has_selector,
+            not_selectors=not_selectors,
+            has_selectors=has_selectors,
         )
 
     def _try_has_initial_combinator(self) -> Combinator | None:
@@ -710,10 +720,15 @@ class SelectorMatcher:
     def _matches_pseudo(
         self, node: KdlNode, pseudo: PseudoClass, node_sel: NodeSelector
     ) -> bool:
-        if pseudo.name == "not" and pseudo.not_compound is not None:
-            return not self._matches_compound(node, pseudo.not_compound)
-        if pseudo.name == "has" and pseudo.has_selector is not None:
-            return self._matches_has(node, pseudo.has_initial, pseudo.has_selector)
+        if pseudo.name == "not" and pseudo.not_selectors:
+            return not any(
+                self._matches_complex(node, sel) for sel in pseudo.not_selectors
+            )
+        if pseudo.name == "has" and pseudo.has_selectors:
+            return any(
+                self._matches_has(node, initial, sel)
+                for initial, sel in pseudo.has_selectors
+            )
         if pseudo.name == "root":
             return self._ctx.parent_of(node) is None
         if pseudo.name == "empty":
