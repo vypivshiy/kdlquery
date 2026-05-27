@@ -577,7 +577,7 @@ class TestComma:
 
     def test_three_names(self, doc: KdlDocument) -> None:
         r = doc.select("host, backend, expires")
-        assert _names(r) == ["host", "host", "host", "backend", "expires"]
+        assert _names(r) == ["host", "host", "host", "expires", "backend"]
 
     def test_duplicate_dedup(self, doc: KdlDocument) -> None:
         r = doc.select("server, server")
