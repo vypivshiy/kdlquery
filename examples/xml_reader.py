@@ -12,7 +12,14 @@ from __future__ import annotations
 
 from xml.etree.ElementTree import Element, tostring
 
-from kdlquery import KDL2CSTParser, KdlNode, ReadDiagnostic, Reader, WalkContext, parse_into
+from kdlquery import (
+    KDL2CSTParser,
+    KdlNode,
+    ReadDiagnostic,
+    Reader,
+    WalkContext,
+    parse_into,
+)
 
 KDL_SOURCE = """\
 database "myapp" driver="postgres" {
