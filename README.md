@@ -172,6 +172,42 @@ doc.select_one("server[tls=#true]")
 # → server "primary"
 ```
 
+### Node selectors
+
+`KdlNode` also has `select()` and `select_one()` for querying within a node's children subtree. This is useful when you already have a reference to a specific node and want to drill down.
+
+Selectors on `KdlNode` are scoped to descendants — they cannot access parent or root nodes.
+
+```python
+app = doc.nodes[0]
+
+# Query descendants of app
+app.select("server")
+# → [server "primary", server "replica"]
+
+app.select("server > host")
+# → [host "localhost", host "127.0.0.1", host "replica.local"]
+
+app.select("route:first-child")
+# → [route "GET" "/api/users"]
+
+# All selectors work — filters, combinators, pseudo-classes
+app.select('plugin:has(> backend)')
+# → [plugin "cache"]
+
+app.select_one("host")
+# → host "localhost"
+
+# Scoped to subtree — won't escape the node
+primary = doc.select_one("server[tls=#true]")
+primary.select("host")
+# → [host "localhost", host "127.0.0.1"]
+
+# :root never matches on KdlNode — there is no root concept in a subtree
+app.select("*:root")
+# → []
+```
+
 ### Reader API
 
 The Reader API lets you transform a KDL document into arbitrary Python objects by walking the node tree.
