@@ -6,9 +6,11 @@ from kdlquery import (
     KdlNode,
     KdlValue,
     DictReader,
+    WalkContext,
     parse,
     parse_into,
 )
+from kdlquery.dict_reader import Node
 
 
 # ---------------------------------------------------------------------------
@@ -17,7 +19,7 @@ from kdlquery import (
 
 
 class TestKdlValue:
-    def test_construction(self):
+    def test_construction(self) -> None:
         from kdlquery.types import Position, Span
 
         span = Span(Position(0, 1, 1), Position(2, 1, 3))
@@ -26,20 +28,20 @@ class TestKdlValue:
         assert v.span == span
         assert v.type_annotation is None
 
-    def test_with_type_annotation(self):
+    def test_with_type_annotation(self) -> None:
         from kdlquery.types import Position, Span
 
         span = Span(Position(0, 1, 1), Position(5, 1, 6))
         v = KdlValue(value=42, span=span, type_annotation="(u8)")
         assert v.type_annotation == "(u8)"
 
-    def test_frozen(self):
+    def test_frozen(self) -> None:
         from kdlquery.types import Position, Span
 
         span = Span(Position(0, 1, 1), Position(1, 1, 2))
         v = KdlValue(value="x", span=span)
         with pytest.raises(AttributeError):
-            v.value = "y"
+            v.value = "y"  # type: ignore[misc]
 
 
 # ---------------------------------------------------------------------------
@@ -48,7 +50,7 @@ class TestKdlValue:
 
 
 class TestKdlNodeFromCst:
-    def test_simple_node(self):
+    def test_simple_node(self) -> None:
         doc = KDL2CSTParser().parse('item "hello" count=5')
         node = KdlNode.from_cst(doc.nodes[0])
         assert node.name == "item"
@@ -57,13 +59,13 @@ class TestKdlNodeFromCst:
         assert node.type_annotation is None
         assert node.children == ()
 
-    def test_node_with_type_annotation(self):
+    def test_node_with_type_annotation(self) -> None:
         doc = KDL2CSTParser().parse('(published)date "1970-01-01"')
         node = KdlNode.from_cst(doc.nodes[0])
         assert node.type_annotation == "(published)"
         assert node.args[0].value == "1970-01-01"
 
-    def test_nested_children(self):
+    def test_nested_children(self) -> None:
         doc = KDL2CSTParser().parse(
             """
 package {
@@ -78,7 +80,7 @@ package {
         assert node.children[0].name == "name"
         assert node.children[1].name == "version"
 
-    def test_arg_type_annotation_preserved(self):
+    def test_arg_type_annotation_preserved(self) -> None:
         doc = KDL2CSTParser().parse('node (array)"str"')
         node = KdlNode.from_cst(doc.nodes[0])
         assert node.args[0].type_annotation == "(array)"
@@ -92,31 +94,31 @@ package {
 
 class TestKdlNodeMethods:
     @pytest.fixture()
-    def node(self):
+    def node(self) -> KdlNode:
         doc = KDL2CSTParser().parse('item "hello" 42 count=5 active=#true')
         return KdlNode.from_cst(doc.nodes[0])
 
-    def test_get_arg(self, node):
+    def test_get_arg(self, node: KdlNode) -> None:
         assert node.get_arg(0) == "hello"
         assert node.get_arg(1) == 42
         assert node.get_arg(2) is None
         assert node.get_arg(2, "default") == "default"
 
-    def test_get_prop(self, node):
+    def test_get_prop(self, node: KdlNode) -> None:
         assert node.get_prop("count") == 5
         assert node.get_prop("active") is True
         assert node.get_prop("missing") is None
         assert node.get_prop("missing", 0) == 0
 
-    def test_has_prop(self, node):
+    def test_has_prop(self, node: KdlNode) -> None:
         assert node.has_prop("count") is True
         assert node.has_prop("active") is True
         assert node.has_prop("missing") is False
 
-    def test_iter_args(self, node):
+    def test_iter_args(self, node: KdlNode) -> None:
         assert list(node.iter_args()) == ["hello", 42]
 
-    def test_iter_props(self, node):
+    def test_iter_props(self, node: KdlNode) -> None:
         props = dict(node.iter_props())
         assert props == {"count": 5, "active": True}
 
@@ -128,7 +130,7 @@ class TestKdlNodeMethods:
 
 class TestKdlDocument:
     @pytest.fixture()
-    def document(self):
+    def document(self) -> KdlDocument:
         return parse(
             """
 root {
@@ -141,27 +143,29 @@ top-level 42
 """
         )
 
-    def test_from_cst_nodes(self, document):
+    def test_from_cst_nodes(self, document: KdlDocument) -> None:
         assert len(document.nodes) == 2
         assert document.nodes[0].name == "root"
         assert document.nodes[1].name == "top-level"
 
-    def test_parent_of_root_is_none(self, document):
+    def test_parent_of_root_is_none(self, document: KdlDocument) -> None:
         assert document.parent_of(document.nodes[0]) is None
         assert document.parent_of(document.nodes[1]) is None
 
-    def test_parent_of_child(self, document):
+    def test_parent_of_child(self, document: KdlDocument) -> None:
         root = document.nodes[0]
         child_a = root.children[0]
         assert document.parent_of(child_a) is root
 
-    def test_parent_of_grandchild(self, document):
+    def test_parent_of_grandchild(self, document: KdlDocument) -> None:
         root = document.nodes[0]
         grandchild = root.children[0].children[0]
         assert document.parent_of(grandchild) is root.children[0]
-        assert document.parent_of(document.parent_of(grandchild)) is root
+        parent = document.parent_of(grandchild)
+        assert parent is not None
+        assert document.parent_of(parent) is root
 
-    def test_depth_of(self, document):
+    def test_depth_of(self, document: KdlDocument) -> None:
         root = document.nodes[0]
         child = root.children[0]
         grandchild = child.children[0]
@@ -169,28 +173,28 @@ top-level 42
         assert document.depth_of(child) == 1
         assert document.depth_of(grandchild) == 2
 
-    def test_depth_of_top_level(self, document):
+    def test_depth_of_top_level(self, document: KdlDocument) -> None:
         assert document.depth_of(document.nodes[1]) == 0
 
-    def test_index_of(self, document):
+    def test_index_of(self, document: KdlDocument) -> None:
         root = document.nodes[0]
         assert document.index_of(root) == 0
         assert document.index_of(document.nodes[1]) == 1
         assert document.index_of(root.children[0]) == 0
         assert document.index_of(root.children[1]) == 1
 
-    def test_siblings_of(self, document):
+    def test_siblings_of(self, document: KdlDocument) -> None:
         root = document.nodes[0]
         child_a = root.children[0]
         child_b = root.children[1]
         assert document.siblings_of(child_a) == (child_a, child_b)
         assert document.siblings_of(root) == document.nodes
 
-    def test_iter_nodes(self, document):
+    def test_iter_nodes(self, document: KdlDocument) -> None:
         names = [n.name for n in document.iter_nodes()]
         assert names == ["root", "child-a", "grandchild", "child-b", "top-level"]
 
-    def test_select_basic(self, document):
+    def test_select_basic(self, document: KdlDocument) -> None:
         results = document.select("grandchild")
         assert all(n.name == "grandchild" for n in results)
 
@@ -201,11 +205,11 @@ top-level 42
 
 
 class TestReaderNewApi:
-    def test_on_node_receives_kdlnode(self):
+    def test_on_node_receives_kdlnode(self) -> None:
         received: list[KdlNode] = []
 
         class Collector(DictReader):
-            def on_node(self, node, ctx):
+            def on_node(self, node: KdlNode, ctx: WalkContext[Node]) -> Node:
                 received.append(node)
                 return super().on_node(node, ctx)
 
@@ -216,11 +220,11 @@ class TestReaderNewApi:
         assert received[0].name == "a"
         assert received[1].name == "b"
 
-    def test_walk_context_depth(self):
+    def test_walk_context_depth(self) -> None:
         depths: list[int] = []
 
         class DepthReader(DictReader):
-            def on_node(self, node, ctx):
+            def on_node(self, node: KdlNode, ctx: WalkContext[Node]) -> Node:
                 depths.append(ctx.depth)
                 return super().on_node(node, ctx)
 
@@ -229,11 +233,11 @@ class TestReaderNewApi:
         parse_into(cst, DepthReader())
         assert depths == [0, 1, 2]
 
-    def test_walk_context_parent(self):
+    def test_walk_context_parent(self) -> None:
         parents: list[str | None] = []
 
         class ParentReader(DictReader):
-            def on_node(self, node, ctx):
+            def on_node(self, node: KdlNode, ctx: WalkContext[Node]) -> Node:
                 parents.append(ctx.parent.name if ctx.parent else None)
                 return super().on_node(node, ctx)
 
@@ -242,11 +246,11 @@ class TestReaderNewApi:
         parse_into(cst, ParentReader())
         assert parents == [None, "root"]
 
-    def test_walk_context_index(self):
+    def test_walk_context_index(self) -> None:
         indices: list[int] = []
 
         class IndexReader(DictReader):
-            def on_node(self, node, ctx):
+            def on_node(self, node: KdlNode, ctx: WalkContext[Node]) -> Node:
                 indices.append(ctx.index)
                 return super().on_node(node, ctx)
 
@@ -262,7 +266,7 @@ class TestReaderNewApi:
 
 
 class TestParse:
-    def test_simple(self):
+    def test_simple(self) -> None:
         doc = parse('item "hello" count=5')
         assert isinstance(doc, KdlDocument)
         assert len(doc.nodes) == 1
@@ -270,7 +274,7 @@ class TestParse:
         assert doc.nodes[0].get_arg(0) == "hello"
         assert doc.nodes[0].get_prop("count") == 5
 
-    def test_nested(self):
+    def test_nested(self) -> None:
         doc = parse(
             """
 package {
@@ -284,12 +288,12 @@ package {
         assert len(pkg.children) == 2
         assert doc.parent_of(pkg.children[0]) is pkg
 
-    def test_empty_document(self):
+    def test_empty_document(self) -> None:
         doc = parse("")
         assert isinstance(doc, KdlDocument)
         assert len(doc.nodes) == 0
 
-    def test_span_preserved(self):
+    def test_span_preserved(self) -> None:
         doc = parse("node 42")
         assert doc.nodes[0].span.start.line >= 1
 
@@ -300,7 +304,7 @@ package {
 
 
 class TestDictReader:
-    def test_produces_dict_tree(self):
+    def test_produces_dict_tree(self) -> None:
         src = """
 root {
     child "arg" key="val"

@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from kdlquery.types import CSTArgEntry, CSTPropEntry, KDLParseError
+from kdlquery.types import CSTArgEntry, CSTPropEntry, CSTValue, KDLParseError
 from kdlquery.parser import KDL2CSTParser
 
 
@@ -13,19 +13,19 @@ _INVALID_KDL_FILES = [f for f in _ALL_KDL_FILES if f.name.endswith("_fail.kdl")]
 
 
 @pytest.mark.parametrize("file", _VALID_KDL_FILES, ids=lambda p: p.name)
-def test_orig_kdl2_valid_cases(file: Path):
+def test_orig_kdl2_valid_cases(file: Path) -> None:
     parser = KDL2CSTParser()
     doc = parser.parse(file.read_text(encoding="utf-8-sig"))
     assert doc.span.end.offset >= doc.span.start.offset
 
 
 @pytest.mark.parametrize("file", _INVALID_KDL_FILES, ids=lambda p: p.name)
-def test_orig_kdl2_invalid_cases(file: Path):
+def test_orig_kdl2_invalid_cases(file: Path) -> None:
     with pytest.raises(KDLParseError):
         KDL2CSTParser().parse(file.read_text(encoding="utf-8-sig"))
 
 
-def test_kdl_parser_keeps_spans_and_entries():
+def test_kdl_parser_keeps_spans_and_entries() -> None:
     src = """
 struct Main {
     item type=list {
@@ -58,7 +58,7 @@ struct Main {
     assert item.span.end.offset > item.span.start.offset
 
 
-def test_kdl_parser_multiline_and_raw_strings():
+def test_kdl_parser_multiline_and_raw_strings() -> None:
     src = '''
 @doc """
 line1
@@ -84,7 +84,7 @@ abc
     assert "(?xs)" in define_node.entries[0].value.value
 
 
-def test_kdl_parser_accepts_dotted_bare_identifier_values():
+def test_kdl_parser_accepts_dotted_bare_identifier_values() -> None:
     src = """
 struct X {
     f { css-all .col-auto }
@@ -98,7 +98,7 @@ struct X {
     assert css_all.entries[0].value.value == ".col-auto"
 
 
-def test_kdl_parser_allows_string_identifier_node_name():
+def test_kdl_parser_allows_string_identifier_node_name() -> None:
     src = """
 repl {
     "from" "to"
@@ -112,7 +112,7 @@ repl {
     assert child.entries[0].value.value == "to"
 
 
-def test_kdl_parser_parses_radix_and_keyword_numbers():
+def test_kdl_parser_parses_radix_and_keyword_numbers() -> None:
     src = """
 node 0x10 0o10 0b10 #inf #-inf #nan
 """
@@ -125,12 +125,15 @@ node 0x10 0o10 0b10 #inf #-inf #nan
     assert vals[0] == 16
     assert vals[1] == 8
     assert vals[2] == 2
+    assert isinstance(vals[3], (int, float))
+    assert isinstance(vals[4], (int, float))
+    assert isinstance(vals[5], (int, float))
     assert vals[3] > 0
     assert vals[4] < 0
     assert vals[5] != vals[5]
 
 
-def test_kdl_parser_supports_slashdash_omission():
+def test_kdl_parser_supports_slashdash_omission() -> None:
     src = """
 /- dropped 1
 kept 2
@@ -141,7 +144,7 @@ kept 2
     assert doc.nodes[0].entries[0].value.value == 2
 
 
-def test_kdl_parser_supports_nested_block_comments():
+def test_kdl_parser_supports_nested_block_comments() -> None:
     src = """
 /* outer
    /* inner */
@@ -153,18 +156,18 @@ node 1
     assert doc.nodes[0].name.value == "node"
 
 
-def test_kdl_parser_raises_on_unterminated_block_comment():
+def test_kdl_parser_raises_on_unterminated_block_comment() -> None:
     with pytest.raises(KDLParseError, match="Unterminated block comment"):
         KDL2CSTParser().parse("/* x")
 
 
-def test_kdl_parser_raises_on_newline_in_quoted_string():
+def test_kdl_parser_raises_on_newline_in_quoted_string() -> None:
     bad = 'node "a\nb"'
     with pytest.raises(KDLParseError, match="Newline in quoted string"):
         KDL2CSTParser().parse(bad)
 
 
-def test_kdl_parser_supports_escline_line_continuation():
+def test_kdl_parser_supports_escline_line_continuation() -> None:
     src = 'node "a" \\\n "b"'
     doc = KDL2CSTParser().parse(src)
     vals = [
@@ -175,7 +178,7 @@ def test_kdl_parser_supports_escline_line_continuation():
     assert vals == ["a", "b"]
 
 
-def test_kdl_parser_handles_spec_like_package_example():
+def test_kdl_parser_handles_spec_like_package_example() -> None:
     src = '''
 package {
   name my-pkg
@@ -248,35 +251,40 @@ package {
 
 
 class TestTypeAnnotationPropagation:
-    def test_type_annotation_on_arg_value(self):
+    def test_type_annotation_on_arg_value(self) -> None:
         doc = KDL2CSTParser().parse('node (array)"str"')
         arg = doc.nodes[0].entries[0]
         assert isinstance(arg, CSTArgEntry)
+        assert isinstance(arg.value, CSTValue)
         assert arg.value.type_annotation is not None
         assert arg.value.type_annotation.raw == "(array)"
 
-    def test_type_annotation_on_property_value(self):
+    def test_type_annotation_on_property_value(self) -> None:
         doc = KDL2CSTParser().parse("node prop=(u8)123")
         prop = doc.nodes[0].entries[0]
         assert isinstance(prop, CSTPropEntry)
+        assert isinstance(prop.value, CSTValue)
         assert prop.value.type_annotation is not None
         assert prop.value.type_annotation.raw == "(u8)"
 
-    def test_type_annotation_on_node(self):
+    def test_type_annotation_on_node(self) -> None:
         doc = KDL2CSTParser().parse('(published)date "1970-01-01"')
         assert doc.nodes[0].type_annotation is not None
         assert doc.nodes[0].type_annotation.raw == "(published)"
 
-    def test_no_type_annotation(self):
+    def test_no_type_annotation(self) -> None:
         doc = KDL2CSTParser().parse('node "plain"')
         assert doc.nodes[0].type_annotation is None
         arg = doc.nodes[0].entries[0]
         assert isinstance(arg, CSTArgEntry)
+        assert isinstance(arg.value, CSTValue)
         assert arg.value.type_annotation is None
 
-    def test_typed_bare_identifier_value(self):
+    def test_typed_bare_identifier_value(self) -> None:
         doc = KDL2CSTParser().parse("node (array)str")
         arg = doc.nodes[0].entries[0]
         assert isinstance(arg, CSTArgEntry)
+        assert isinstance(arg.value, CSTValue)
+        assert arg.value.type_annotation is not None
         assert arg.value.type_annotation.raw == "(array)"
         assert arg.value.value == "str"

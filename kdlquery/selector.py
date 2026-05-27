@@ -643,7 +643,7 @@ class SelectorMatcher:
     @staticmethod
     def _compare(actual: Any, op: str, expected: Any) -> bool:
         if op == "=":
-            return actual == expected
+            return bool(actual == expected)
         if op == "^=":
             return str(actual).startswith(str(expected))
         if op == "$=":

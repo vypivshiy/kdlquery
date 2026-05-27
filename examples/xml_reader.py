@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from xml.etree.ElementTree import Element, tostring
 
-from kdlquery import KDL2CSTParser, KdlNode, Reader, WalkContext, parse_into
+from kdlquery import KDL2CSTParser, KdlNode, ReadDiagnostic, Reader, WalkContext, parse_into
 
 KDL_SOURCE = """\
 database "myapp" driver="postgres" {
@@ -68,7 +68,7 @@ class XmlReader(Reader[Element, str]):
     def finalize(
         self,
         nodes: list[Element],
-        diagnostics: list[object],
+        diagnostics: list[ReadDiagnostic],
     ) -> str:
         # Wrap in a root <document> element
         root = Element("document")
