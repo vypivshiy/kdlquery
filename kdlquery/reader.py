@@ -337,6 +337,49 @@ class KdlNode:
         for k, v in self.properties.items():
             yield k, v.value
 
+    def select(self, selector: str) -> list[KdlNode]:
+        """Select descendant nodes matching a CSS3-like selector.
+
+        Searches within this node's children subtree. The node itself
+        is not included in the search.
+
+        Args:
+            selector: A CSS3-compatible selector string.
+
+        Returns:
+            List of matching descendant nodes in document order.
+
+        Raises:
+            SelectorError: If the selector syntax is invalid.
+        """
+        from .selector import SelectorMatcher, _SubtreeContext, _parse_selector
+
+        ctx = _SubtreeContext(self)
+        sel = _parse_selector(selector)
+        return SelectorMatcher(ctx).match(sel)
+
+    def select_one(self, selector: str) -> KdlNode | None:
+        """Return the first descendant matching a selector, or None.
+
+        Searches within this node's children subtree. The node itself
+        is not included in the search.
+
+        Args:
+            selector: A CSS3-compatible selector string.
+
+        Returns:
+            The first matching descendant node in document order,
+            or ``None``.
+
+        Raises:
+            SelectorError: If the selector syntax is invalid.
+        """
+        from .selector import SelectorMatcher, _SubtreeContext, _parse_selector
+
+        ctx = _SubtreeContext(self)
+        sel = _parse_selector(selector)
+        return SelectorMatcher(ctx).match_one(sel)
+
 
 # ---------------------------------------------------------------------------
 # WalkContext

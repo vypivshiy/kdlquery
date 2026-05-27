@@ -3,9 +3,8 @@ from __future__ import annotations
 import functools
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Iterator, NamedTuple
+from typing import Any, Iterator, NamedTuple, Protocol
 
-from .document import KdlDocument
 from .reader import KdlNode
 
 
@@ -16,6 +15,59 @@ from .reader import KdlNode
 
 class SelectorError(ValueError):
     pass
+
+
+# ---------------------------------------------------------------------------
+# Context protocol
+# ---------------------------------------------------------------------------
+
+
+class MatchContext(Protocol):
+    def iter_nodes(self) -> Iterator[KdlNode]: ...
+    def parent_of(self, node: KdlNode) -> KdlNode | None: ...
+    def siblings_of(self, node: KdlNode) -> tuple[KdlNode, ...]: ...
+    def index_of(self, node: KdlNode) -> int: ...
+
+
+class _SubtreeContext:
+    def __init__(self, node: KdlNode) -> None:
+        self._node = node
+        self._parent_map: dict[int, KdlNode] = {}
+        self._build_maps()
+
+    def _build_maps(self) -> None:
+        stack: list[tuple[KdlNode, KdlNode]] = []
+        for child in reversed(self._node.children):
+            stack.append((child, self._node))
+        while stack:
+            node, parent = stack.pop()
+            self._parent_map[id(node)] = parent
+            for child in reversed(node.children):
+                stack.append((child, node))
+
+    def iter_nodes(self) -> Iterator[KdlNode]:
+        stack: list[KdlNode] = list(reversed(self._node.children))
+        while stack:
+            node = stack.pop()
+            yield node
+            for child in reversed(node.children):
+                stack.append(child)
+
+    def parent_of(self, node: KdlNode) -> KdlNode | None:
+        return self._parent_map.get(id(node))
+
+    def siblings_of(self, node: KdlNode) -> tuple[KdlNode, ...]:
+        parent = self._parent_map.get(id(node))
+        if parent is not None:
+            return parent.children
+        return self._node.children
+
+    def index_of(self, node: KdlNode) -> int:
+        siblings = self.siblings_of(node)
+        for i, s in enumerate(siblings):
+            if s is node:
+                return i
+        return -1
 
 
 # ---------------------------------------------------------------------------
@@ -502,14 +554,14 @@ class SelectorParser:
 
 
 class SelectorMatcher:
-    def __init__(self, document: KdlDocument):
-        self._doc = document
+    def __init__(self, context: MatchContext):
+        self._ctx = context
 
     def match(self, selector: SelectorList) -> list[KdlNode]:
         results: list[KdlNode] = []
         seen: set[int] = set()
         selectors = selector.selectors
-        for node in self._doc.iter_nodes():
+        for node in self._ctx.iter_nodes():
             nid = id(node)
             if nid in seen:
                 continue
@@ -521,7 +573,7 @@ class SelectorMatcher:
         return results
 
     def match_one(self, selector: SelectorList) -> KdlNode | None:
-        for node in self._doc.iter_nodes():
+        for node in self._ctx.iter_nodes():
             for complex_sel in selector.selectors:
                 if self._matches_complex(node, complex_sel):
                     return node
@@ -547,34 +599,34 @@ class SelectorMatcher:
         target: CompoundSelector,
     ) -> KdlNode | None:
         if comb == Combinator.CHILD:
-            parent = self._doc.parent_of(node)
+            parent = self._ctx.parent_of(node)
             if parent is not None and self._matches_compound(parent, target):
                 return parent
             return None
 
         if comb == Combinator.DESCENDANT:
-            cur = self._doc.parent_of(node)
+            cur = self._ctx.parent_of(node)
             while cur is not None:
                 if self._matches_compound(cur, target):
                     return cur
-                cur = self._doc.parent_of(cur)
+                cur = self._ctx.parent_of(cur)
             return None
 
         if comb == Combinator.ADJACENT:
-            idx = self._doc.index_of(node)
+            idx = self._ctx.index_of(node)
             if idx <= 0:
                 return None
-            siblings = self._doc.siblings_of(node)
+            siblings = self._ctx.siblings_of(node)
             prev = siblings[idx - 1]
             if self._matches_compound(prev, target):
                 return prev
             return None
 
         if comb == Combinator.GENERAL_SIBLING:
-            idx = self._doc.index_of(node)
+            idx = self._ctx.index_of(node)
             if idx <= 0:
                 return None
-            siblings = self._doc.siblings_of(node)
+            siblings = self._ctx.siblings_of(node)
             for j in range(idx - 1, -1, -1):
                 if self._matches_compound(siblings[j], target):
                     return siblings[j]
@@ -663,10 +715,10 @@ class SelectorMatcher:
         if pseudo.name == "has" and pseudo.has_selector is not None:
             return self._matches_has(node, pseudo.has_initial, pseudo.has_selector)
         if pseudo.name == "root":
-            return self._doc.parent_of(node) is None
+            return self._ctx.parent_of(node) is None
         if pseudo.name == "empty":
             return len(node.children) == 0
-        siblings = self._doc.siblings_of(node)
+        siblings = self._ctx.siblings_of(node)
         same_type = [s for s in siblings if self._matches_node(s, node_sel)]
         if pseudo.name == "only-child":
             return len(same_type) == 1
@@ -735,6 +787,7 @@ def _parse_selector(selector: str) -> SelectorList:
 
 
 __all__ = [
+    "MatchContext",
     "SelectorError",
     "SelectorLexer",
     "SelectorParser",

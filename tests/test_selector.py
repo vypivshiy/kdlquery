@@ -642,3 +642,150 @@ class TestSelectOne:
 
     def test_no_match_comma(self, doc: KdlDocument) -> None:
         assert doc.select_one("nonexist1, nonexist2") is None
+
+
+# ---------------------------------------------------------------------------
+# KdlNode.select / KdlNode.select_one
+# ---------------------------------------------------------------------------
+
+
+class TestKdlNodeSelect:
+    def test_basic_descendant(self, doc: KdlDocument) -> None:
+        app = doc.select_one("app")
+        assert app is not None
+        r = app.select("server")
+        assert _first_args(r) == ["primary", "replica"]
+
+    def test_deep_descendant(self, doc: KdlDocument) -> None:
+        app = doc.select_one("app")
+        assert app is not None
+        r = app.select("host")
+        assert _first_args(r) == ["localhost", "127.0.0.1", "replica.local"]
+
+    def test_child_combinator(self, doc: KdlDocument) -> None:
+        app = doc.select_one("app")
+        assert app is not None
+        r = app.select("server > host")
+        assert _first_args(r) == ["localhost", "127.0.0.1", "replica.local"]
+
+    def test_nested_child(self, doc: KdlDocument) -> None:
+        app = doc.select_one("app")
+        assert app is not None
+        r = app.select("router > route")
+        assert _first_args(r) == ["GET", "POST", "GET", "GET"]
+
+    def test_type_annotation(self, doc: KdlDocument) -> None:
+        app = doc.select_one("app")
+        assert app is not None
+        r = app.select("(network)server")
+        assert _first_args(r) == ["primary", "replica"]
+
+    def test_property_filter(self, doc: KdlDocument) -> None:
+        app = doc.select_one("app")
+        assert app is not None
+        r = app.select("server[tls=#true]")
+        assert _first_args(r) == ["primary"]
+
+    def test_argument_filter(self, doc: KdlDocument) -> None:
+        app = doc.select_one("app")
+        assert app is not None
+        r = app.select('route[0="POST"]')
+        assert _first_args(r) == ["POST"]
+
+    def test_first_child(self, doc: KdlDocument) -> None:
+        router = doc.select_one("router")
+        assert router is not None
+        r = router.select("route:first-child")
+        assert _first_args(r) == ["GET"]
+
+    def test_last_child(self, doc: KdlDocument) -> None:
+        router = doc.select_one("router")
+        assert router is not None
+        r = router.select("route:last-child")
+        assert _first_args(r) == ["GET"]
+
+    def test_nth_child(self, doc: KdlDocument) -> None:
+        router = doc.select_one("router")
+        assert router is not None
+        r = router.select("route:nth-child(2)")
+        assert _first_args(r) == ["POST"]
+
+    def test_empty(self, doc: KdlDocument) -> None:
+        debug = doc.select_one('plugin[0="debug"]')
+        assert debug is not None
+        r = debug.select("*:empty")
+        assert r == []
+
+    def test_only_child(self, doc: KdlDocument) -> None:
+        server = doc.select_one('server[0="replica"]')
+        assert server is not None
+        r = server.select("host:only-child")
+        assert _first_args(r) == ["replica.local"]
+
+    def test_has(self, doc: KdlDocument) -> None:
+        plugins = doc.select_one("plugins")
+        assert plugins is not None
+        r = plugins.select("plugin:has(> backend)")
+        assert _first_args(r) == ["cache"]
+
+    def test_not(self, doc: KdlDocument) -> None:
+        router = doc.select_one("router")
+        assert router is not None
+        r = router.select("route:not([auth=#true])")
+        assert _first_args(r) == ["GET", "GET"]
+
+    def test_adjacent_sibling(self, doc: KdlDocument) -> None:
+        router = doc.select_one("router")
+        assert router is not None
+        r = router.select('route[0="GET"] + route')
+        assert _first_args(r) == ["POST", "GET"]
+
+    def test_general_sibling(self, doc: KdlDocument) -> None:
+        router = doc.select_one("router")
+        assert router is not None
+        r = router.select('route[0="POST"] ~ route')
+        assert _first_args(r) == ["GET", "GET"]
+
+    def test_root_never_matches(self, doc: KdlDocument) -> None:
+        app = doc.select_one("app")
+        assert app is not None
+        r = app.select("*:root")
+        assert r == []
+
+    def test_wildcard_all_descendants(self, doc: KdlDocument) -> None:
+        app = doc.select_one("app")
+        assert app is not None
+        r = app.select("*")
+        assert app not in r
+        assert len(r) > 0
+
+    def test_empty_children(self, doc: KdlDocument) -> None:
+        debug = doc.select_one('plugin[0="debug"]')
+        assert debug is not None
+        assert debug.select("*") == []
+
+    def test_comma(self, doc: KdlDocument) -> None:
+        app = doc.select_one("app")
+        assert app is not None
+        r = app.select("host, backend")
+        assert _names(r) == ["host", "host", "host", "backend"]
+
+    def test_select_one(self, doc: KdlDocument) -> None:
+        app = doc.select_one("app")
+        assert app is not None
+        node = app.select_one("server")
+        assert node is not None
+        assert node.get_arg(0) == "primary"
+
+    def test_select_one_none(self, doc: KdlDocument) -> None:
+        debug = doc.select_one('plugin[0="debug"]')
+        assert debug is not None
+        assert debug.select_one("anything") is None
+
+    def test_scoped_to_subtree(self, doc: KdlDocument) -> None:
+        server = doc.select_one('server[0="primary"]')
+        assert server is not None
+        r = server.select("host")
+        assert _first_args(r) == ["localhost", "127.0.0.1"]
+        # Should not find hosts from other server
+        assert "replica.local" not in _first_args(r)
