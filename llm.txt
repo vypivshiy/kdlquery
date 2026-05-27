@@ -1,0 +1,150 @@
+# kdlquery
+
+> A pure Python KDL 2.0 parser with a CSS3-like selector API.
+
+## Overview
+
+kdlquery provides four main capabilities:
+
+1. **Lossless CST parser** (`kdlquery.parser`) — Lexer + recursive-descent parser producing a typed CST with full source spans. Conforms to KDL 2.0 spec.
+2. **Immutable node tree** (`kdlquery.document`) — `KdlDocument` with pre-built parent/depth/sibling/index maps for O(1) structural queries.
+3. **Reader API** (`kdlquery.reader`) — Walk the node tree and transform it into arbitrary Python objects via the `Reader` abstract class. Includes `Walker`, `WalkContext`, diagnostic collection, and `parse_into()` convenience function. `DictReader` (`kdlquery.dict_reader`) produces nested dicts.
+4. **Selector engine** (`kdlquery.selector`) — CSS3-like selectors for querying nodes by name, type annotation, properties, arguments, combinators, and pseudo-classes. Lexer → parser → matcher pipeline with LRU-cached selector parsing.
+
+## Quick start
+
+```python
+from kdlquery import parse
+
+doc = parse('''
+app "my-service" version="1.0.0" {
+    server "primary" port=8080 tls=#true
+    server "replica" port=8081 tls=#false
+}
+''')
+
+doc.select("server[tls=#true]")    # → [server "primary"]
+doc.select_one("app")              # → app node
+doc.parent_of(doc.nodes[0].children[0])  # → app node
+```
+
+## Project structure
+
+```
+kdlquery/
+  __init__.py      — Public API: parse(), parse_into(), all major types
+  types.py         — CST types: Token, CSTNode, CSTValue, CSTEntry, Span, Position
+  parser.py        — KDLLexer, KDL2CSTParser, escape/multiline string decoding
+  document.py      — KdlDocument: parent/depth/index maps, select(), select_one()
+  reader.py        — KdlNode, KdlValue, Reader ABC, Walker, WalkContext, parse_into()
+  dict_reader.py   — DictReader: KdlNode tree → list of nested dicts
+  selector.py      — SelectorLexer, SelectorParser, SelectorMatcher + AST types
+tests/
+  test_kdl_parser.py
+  test_selector.py
+  test_reader.py
+```
+
+## Dependencies
+
+- Python 3.10+, zero external dependencies.
+- Dev: pytest, mypy, ruff, pytest-cov.
+
+## Public API surface
+
+### Entry points
+
+- `parse(source: str) -> KdlDocument` — Parse KDL 2.0 string into queryable document tree.
+- `parse_into(document: CSTDocument, reader: Reader, *, strict=False) -> tuple[R, list[ReadDiagnostic]]` — Walk CST through a Reader.
+
+### Key types
+
+- **KdlDocument** — Owns the node tree; provides `select()`, `select_one()`, `parent_of()`, `depth_of()`, `index_of()`, `siblings_of()`, `iter_nodes()`.
+- **KdlNode** — Frozen node with `name`, `type_annotation`, `args`, `properties`, `children`, `span`. Methods: `get_arg(i)`, `get_prop(k)`, `has_prop(k)`, `iter_args()`, `iter_props()`.
+- **KdlValue** — Frozen typed value with `value`, `span`, `type_annotation`.
+- **Reader[T_node, R]** — ABC with `on_node()`, `error_node()`, `finalize()`.
+- **DictReader** — Built-in reader producing `Node` TypedDicts.
+- **SelectorError** — Raised on invalid selector syntax.
+
+### CST types (low-level)
+
+- `KDL2CSTParser().parse(source) -> CSTDocument`
+- `KDLLexer(source).tokenize() -> list[Token]`
+- `CSTDocument`, `CSTNode`, `CSTValue`, `CSTArgEntry`, `CSTPropEntry`, `CSTTypeAnnotation`, `CSTIdentifier`
+
+## Selector syntax
+
+```
+# Node
+name                    by name
+*                       any node
+(type)                  by type annotation
+(type)name              type annotation + name
+
+# Property filters
+[key]                   exists
+[key=val]               equals
+[key^=val]              starts with
+[key$=val]              ends with
+[key~=val]              contains
+[(type)key]             property with type-annotated value
+[(type)key=val]         type-annotated + value match
+
+# Argument filters
+[N]                     argument at position N exists
+[N=val]                 equals
+[N^=val]                starts with
+[N$=val]                ends with
+[N~=val]                contains
+[(type)N]               argument with type annotation
+[*=val]                 any argument equals val
+
+# Combinators
+A B                     descendant
+A > B                   direct child
+A + B                   adjacent sibling
+A ~ B                   general sibling
+A, B                    union (deduplicated)
+
+# Pseudo-classes
+:root
+:first-child
+:last-child
+:nth-child(n)
+:nth-child(2n)
+:nth-child(2n+1)
+:only-child
+:empty
+:not(compound)
+:has(complex)
+:has(> complex)
+```
+
+## Reader pattern
+
+Subclass `Reader[T_node, R]` to transform the tree:
+
+```python
+class MyReader(Reader[dict, dict]):
+    def on_node(self, node: KdlNode, ctx: WalkContext[dict]) -> dict:
+        children = ctx.walk_children()
+        return {"name": node.name, "children": children}
+
+    def error_node(self, node, message, ctx):
+        return {"name": node.name, "error": message}
+
+    def finalize(self, nodes, diagnostics):
+        return nodes
+```
+
+## Conventions
+
+- All node/value types are frozen (immutable) dataclasses or NamedTuples.
+- `MappingProxyType` for node properties (read-only dict).
+- Source spans (`Span(start=Position, end=Position)`) on every CST node and high-level node.
+- Selector parsing is cached with `functools.lru_cache`.
+- KDL 2.0 spec features: slashdash comments, esclines, multiline strings, raw strings, type annotations, unicode whitespace.
+
+## License
+
+MIT
