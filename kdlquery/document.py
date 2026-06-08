@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from .types import CSTDocument, Span
 from .reader import KdlNode
@@ -11,9 +11,8 @@ from .reader import KdlNode
 class KdlDocument:
     """Owns a parsed KDL document tree and provides structural queries.
 
-    Maintains internal parent/depth maps keyed by node identity, enabling
-    parent, sibling, depth, and index lookups without mutating the
-    frozen KdlNode tree.
+    Nodes carry their own ``parent`` references, so this class no longer
+    maintains separate parent/depth maps.
 
     Attributes:
         nodes: Top-level nodes of the document, in source order.
@@ -22,47 +21,29 @@ class KdlDocument:
 
     nodes: tuple[KdlNode, ...]
     span: Span
-    _parent_map: dict[int, KdlNode] = field(
-        default_factory=dict,
-        init=False,
-        repr=False,
-    )
-    _depth_map: dict[int, int] = field(
-        default_factory=dict,
-        init=False,
-        repr=False,
-    )
 
     @classmethod
     def from_cst(cls, cst_doc: CSTDocument) -> KdlDocument:
         """Construct a KdlDocument from a CST document.
 
-        Converts all CST nodes to KdlNode instances and builds the
-        internal parent and depth maps in a single pass.
+        Converts all CST nodes to KdlNode instances and wires document
+        back-references so that ``node.document`` returns this document.
 
         Args:
             cst_doc: The CST document produced by ``KDL2CSTParser.parse``.
 
         Returns:
-            A fully initialized KdlDocument with parent and depth maps.
+            A fully initialized KdlDocument.
         """
         nodes = tuple(KdlNode.from_cst(n) for n in cst_doc.nodes)
         doc = cls(nodes=nodes, span=cst_doc.span)
-        doc._build_maps()
+        doc._wire_document_refs()
         return doc
 
-    def _build_maps(self) -> None:
-        """Populate the parent and depth maps via iterative pre-order traversal."""
-        stack: list[tuple[KdlNode, KdlNode | None, int]] = [
-            (n, None, 0) for n in reversed(self.nodes)
-        ]
-        while stack:
-            node, parent, depth = stack.pop()
-            if parent is not None:
-                self._parent_map[id(node)] = parent
-            self._depth_map[id(node)] = depth
-            for child in reversed(node.children):
-                stack.append((child, node, depth + 1))
+    def _wire_document_refs(self) -> None:
+        """Set ``_document`` back-reference on all nodes."""
+        for node in self.iter_nodes():
+            node._document = self
 
     def parent_of(self, node: KdlNode) -> KdlNode | None:
         """Return the parent of a node.
@@ -74,7 +55,7 @@ class KdlDocument:
         Returns:
             The parent node, or ``None`` if this is a root-level node.
         """
-        return self._parent_map.get(id(node))
+        return node.parent
 
     def depth_of(self, node: KdlNode) -> int:
         """Return the depth of a node in the tree.
@@ -86,7 +67,7 @@ class KdlDocument:
         Returns:
             Depth value where ``0`` means root-level.
         """
-        return self._depth_map.get(id(node), 0)
+        return node.depth()
 
     def index_of(self, node: KdlNode) -> int:
         """Return the position of a node among its siblings.
@@ -98,10 +79,14 @@ class KdlDocument:
         Returns:
             Zero-based index among siblings, or ``-1`` if not found.
         """
-        parent = self.parent_of(node)
-        siblings = parent.children if parent is not None else self.nodes
-        for i, s in enumerate(siblings):
-            if s is node:
+        parent = node.parent
+        if parent is not None:
+            for i, s in enumerate(parent.children):
+                if s is node:
+                    return i
+            return -1
+        for i, root_node in enumerate(self.nodes):
+            if root_node is node:
                 return i
         return -1
 
@@ -118,7 +103,7 @@ class KdlDocument:
         Returns:
             Tuple of sibling nodes (includes the node itself).
         """
-        parent = self.parent_of(node)
+        parent = node.parent
         if parent is not None:
             return parent.children
         return self.nodes

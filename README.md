@@ -2,7 +2,7 @@
 
 A pure Python [KDL 2.0](https://kdl.dev/spec) parser with a CSS3-like selector API.
 
-kdlquery provides a lossless CST parser, an immutable node tree with parent/sibling navigation, a Reader API for transforming KDL documents into arbitrary Python objects, and a selector engine for querying nodes by name, type annotation, properties, arguments, combinators, and pseudo-classes.
+kdlquery provides a lossless CST parser, a node tree with parent/sibling navigation, a Reader API for transforming KDL documents into arbitrary Python objects, and a selector engine for querying nodes by name, type annotation, properties, arguments, combinators, and pseudo-classes.
 
 Designed as a foundation for building DSLs — KDL is a good fit for configuration, schemas, and structured data. The parser and selector API together cover the common cases of parsing, validating, and linting KDL documents.
 
@@ -63,7 +63,7 @@ app "my-service" version="1.0.0" {
 """)
 ```
 
-`parse()` returns a `KdlDocument` — an immutable tree of `KdlNode` objects with parent, depth, sibling, and index maps pre-built.
+`parse()` returns a `KdlDocument` — a tree of `KdlNode` objects with parent references wired automatically.
 
 ### Node access
 
@@ -78,7 +78,7 @@ app.get_prop("version")           # "1.0.0"
 for server in app.children:
     print(server.get_arg(0), server.get_prop("port"))
 
-# Tree navigation
+# Tree navigation via KdlDocument (backward-compatible)
 doc.parent_of(app.children[0]) is app   # True
 doc.depth_of(app)                        # 0
 doc.index_of(app.children[1])            # 1
@@ -86,6 +86,11 @@ doc.siblings_of(app.children[0])         # (child_0, child_1, ...)
 ```
 
 ### Selector API
+
+>[!NOTE]
+> This selector implementation intentionally diverges from the [official KDL Query draft](https://github.com/kdl-org/kdl/blob/main/QUERY-SPEC.md) and closely mirrors CSS3 syntax.
+> Should the official query language be finalized and stabilized, a compatibility port to this project may be considered.
+
 
 CSS3-like selectors for querying the node tree.
 
@@ -174,10 +179,6 @@ doc.select_one("server[tls=#true]")
 
 ### Node selectors
 
->[!NOTE]
-> This selector implementation intentionally diverges from the [official KDL Query draft](https://github.com/kdl-org/kdl/blob/main/QUERY-SPEC.md) and closely mirrors CSS3 syntax.  
-> Should the official query language be finalized and stabilized, a compatibility port to this project may be considered.
-
 `KdlNode` also has `select()` and `select_one()` for querying within a node's children subtree. This is useful when you already have a reference to a specific node and want to drill down.
 
 Selectors on `KdlNode` are scoped to descendants — they cannot access parent or root nodes.
@@ -210,6 +211,52 @@ primary.select("host")
 # :root never matches on KdlNode — there is no root concept in a subtree
 app.select("*:root")
 # → []
+```
+
+### Navigation API
+
+DOM-like methods for traversing the node tree. Inspired by `Element.closest()`, `Element.matches()`, and `Node.parentElement` from the browser DOM.
+
+```python
+app = doc.nodes[0]
+server = app.children[0]
+host = server.children[0]
+
+# Direct parent access
+host.parent is server                 # True
+server.parent is app                  # True
+app.parent is None                    # True — root node
+
+# Walk to root
+host.root is app                      # True
+
+# Owning document
+host.document is doc                  # True
+
+# Depth in tree
+app.depth()                           # 0
+server.depth()                        # 1
+host.depth()                          # 2
+
+# Position among siblings
+server.index()                        # 0
+host.siblings()                       # (host, host, timeout)
+
+# Iterate descendants
+list(app.iter_descendants())          # all nodes under app
+
+# All ancestors, bottom-up
+host.parents()                        # [server, app]
+
+# Check if node matches a selector
+host.matches("host")                  # True
+host.matches("server > host")         # True
+host.matches("server[tls=#false]")    # False
+
+# Find nearest ancestor matching a selector (checks self first)
+host.closest("server")                # server node
+host.closest("(network)server[tls=#true]")  # server "primary"
+host.closest("nonexistent")           # None
 ```
 
 ### Reader API

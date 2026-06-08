@@ -7,7 +7,7 @@
 kdlquery provides four main capabilities:
 
 1. **Lossless CST parser** (`kdlquery.parser`) — Lexer + recursive-descent parser producing a typed CST with full source spans. Conforms to KDL 2.0 spec.
-2. **Immutable node tree** (`kdlquery.document`) — `KdlDocument` with pre-built parent/depth/sibling/index maps for O(1) structural queries.
+2. **Node tree** (`kdlquery.document`) — `KdlDocument` with `KdlNode` objects that carry their own `parent` references. Navigation methods delegate to nodes.
 3. **Reader API** (`kdlquery.reader`) — Walk the node tree and transform it into arbitrary Python objects via the `Reader` abstract class. Includes `Walker`, `WalkContext`, diagnostic collection, and `parse_into()` convenience function. `DictReader` (`kdlquery.dict_reader`) produces nested dicts.
 4. **Selector engine** (`kdlquery.selector`) — CSS3-like selectors for querying nodes by name, type annotation, properties, arguments, combinators, and pseudo-classes. Works on both `KdlDocument` (full tree) and `KdlNode` (children subtree only). Lexer → parser → matcher pipeline with LRU-cached selector parsing. `MatchContext` Protocol decouples the matcher from the document.
 
@@ -27,8 +27,19 @@ doc.select("server[tls=#true]")    # → [server "primary"]
 doc.select_one("app")              # → app node
 doc.parent_of(doc.nodes[0].children[0])  # → app node
 
-# Node selectors — scoped to children subtree, no parent/root access
+# Navigation directly on nodes
 app = doc.nodes[0]
+app.children[0].parent is app      # True
+app.children[0].depth()            # 1
+app.children[0].root is app        # True
+
+# Parent queries
+host = doc.select_one("host")
+host.parents()                     # [server, app]
+host.closest("server")             # server node
+host.matches("host")               # True
+
+# Node selectors — scoped to children subtree
 app.select("server > host")        # → [host "localhost", host "127.0.0.1"]
 app.select("*:root")               # → [] (no root concept in subtree)
 ```
@@ -40,14 +51,15 @@ kdlquery/
   __init__.py      — Public API: parse(), parse_into(), all major types
   types.py         — CST types: Token, CSTNode, CSTValue, CSTEntry, Span, Position
   parser.py        — KDLLexer, KDL2CSTParser, escape/multiline string decoding
-  document.py      — KdlDocument: parent/depth/index maps, select(), select_one()
-  reader.py        — KdlNode, KdlValue, Reader ABC, Walker, WalkContext, parse_into()
+  document.py      — KdlDocument: select(), select_one(), parent_of(), depth_of(), etc. (delegate to nodes)
+  reader.py        — KdlNode (mutable, parent refs), KdlValue (frozen), Reader ABC, Walker, WalkContext, parse_into()
   dict_reader.py   — DictReader: KdlNode tree → list of nested dicts
-  selector.py      — SelectorLexer, SelectorParser, SelectorMatcher, MatchContext Protocol, _SubtreeContext + AST types
+  selector.py      — SelectorLexer, SelectorParser, SelectorMatcher, MatchContext Protocol, _SubtreeContext, _SingleNodeContext + AST types
 tests/
   test_kdl_parser.py
   test_selector.py
   test_reader.py
+  test_navigation.py
 ```
 
 ## Dependencies
@@ -64,8 +76,11 @@ tests/
 
 ### Key types
 
-- **KdlDocument** — Owns the node tree; provides `select()`, `select_one()`, `parent_of()`, `depth_of()`, `index_of()`, `siblings_of()`, `iter_nodes()`.
-- **KdlNode** — Frozen node with `name`, `type_annotation`, `args`, `properties`, `children`, `span`. Methods: `get_arg(i)`, `get_prop(k)`, `has_prop(k)`, `iter_args()`, `iter_props()`, `select(selector)`, `select_one(selector)`. Node selectors are scoped to descendants — cannot access parent or root nodes.
+- **KdlDocument** — Owns the node tree; provides `select()`, `select_one()`, `parent_of()`, `depth_of()`, `index_of()`, `siblings_of()`, `iter_nodes()`. All navigation methods delegate to the node's own methods.
+- **KdlNode** — Mutable node with `name`, `type_annotation`, `args`, `properties`, `children`, `span`, `parent`. Methods:
+  - Value access: `get_arg(i)`, `get_prop(k)`, `has_prop(k)`, `iter_args()`, `iter_props()`
+  - Selector queries: `select(selector)`, `select_one(selector)` — scoped to descendants, cannot access parent or root nodes.
+  - Navigation (DOM-like): `root` (property), `document` (property), `depth()`, `index()`, `siblings()`, `iter_descendants()`, `parents()`, `matches(selector)`, `closest(selector)`
 - **KdlValue** — Frozen typed value with `value`, `span`, `type_annotation`.
 - **Reader[T_node, R]** — ABC with `on_node()`, `error_node()`, `finalize()`.
 - **DictReader** — Built-in reader producing `Node` TypedDicts.
@@ -144,8 +159,10 @@ class MyReader(Reader[dict, dict]):
 
 ## Conventions
 
-- All node/value types are frozen (immutable) dataclasses or NamedTuples.
+- `KdlNode` is mutable — nodes carry `parent` references wired after construction.
+- `KdlValue` is frozen (immutable).
 - `MappingProxyType` for node properties (read-only dict).
+- `tuple` for node `args` and `children`.
 - Source spans (`Span(start=Position, end=Position)`) on every CST node and high-level node.
 - Selector parsing is cached with `functools.lru_cache`.
 - KDL 2.0 spec features: slashdash comments, esclines, multiline strings, raw strings, type annotations, unicode whitespace.

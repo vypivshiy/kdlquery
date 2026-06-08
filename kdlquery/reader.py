@@ -5,7 +5,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from enum import Enum
 from types import MappingProxyType
-from typing import Any, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 from .types import (
     CSTArgEntry,
@@ -15,6 +15,9 @@ from .types import (
     CSTValue,
     Span,
 )
+
+if TYPE_CHECKING:
+    from .document import KdlDocument
 
 
 # ---------------------------------------------------------------------------
@@ -199,9 +202,9 @@ class KdlValue:
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
+@dataclass
 class KdlNode:
-    """An immutable node in a parsed KDL document tree.
+    """A node in a parsed KDL document tree.
 
     Corresponds to a single KDL node with its name, optional type annotation,
     positional arguments, named properties, and child nodes.
@@ -213,6 +216,7 @@ class KdlNode:
         properties: Named property values keyed by property name.
         children: Child nodes in source order.
         span: Source location of this node in the original document.
+        parent: Parent node, or ``None`` for root-level nodes.
     """
 
     name: str
@@ -221,6 +225,18 @@ class KdlNode:
     properties: MappingProxyType[str, KdlValue]
     children: tuple[KdlNode, ...]
     span: Span
+    parent: KdlNode | None = field(
+        default=None,
+        init=False,
+        repr=False,
+        compare=False,
+    )
+    _document: Any = field(
+        default=None,
+        init=False,
+        repr=False,
+        compare=False,
+    )
 
     @staticmethod
     def _value_type_annotation(entry_value: object) -> str | None:
@@ -271,7 +287,7 @@ class KdlNode:
         children = tuple(cls.from_cst(c) for c in node.children)
         type_ann = node.type_annotation.raw if node.type_annotation else None
 
-        return cls(
+        instance = cls(
             name=node.name.value,
             type_annotation=type_ann,
             args=tuple(args),
@@ -279,6 +295,8 @@ class KdlNode:
             children=children,
             span=node.span,
         )
+        instance._wire_parents()
+        return instance
 
     def get_arg(self, index: int, default: Any = None) -> Any:
         """Get a positional argument value by index.
@@ -336,6 +354,156 @@ class KdlNode:
         """
         for k, v in self.properties.items():
             yield k, v.value
+
+    # ------------------------------------------------------------------
+    # Parent wiring (internal)
+    # ------------------------------------------------------------------
+
+    def _wire_parents(self) -> None:
+        """Recursively set ``parent`` on all children."""
+        for child in self.children:
+            child.parent = self
+            child._wire_parents()
+
+    # ------------------------------------------------------------------
+    # Tree navigation
+    # ------------------------------------------------------------------
+
+    @property
+    def root(self) -> KdlNode:
+        """Walk up the parent chain to the root node.
+
+        If this node has no parent, returns itself.
+        """
+        node = self
+        while node.parent is not None:
+            node = node.parent
+        return node
+
+    @property
+    def document(self) -> KdlDocument | None:
+        """Return the owning :class:`KdlDocument`, if any.
+
+        Only set when the node was created via
+        :meth:`KdlDocument.from_cst`.  Nodes created by
+        :meth:`KdlNode.from_cst` directly or by :class:`Walker`
+        have no document reference.
+        """
+        return self._document  # type: ignore[no-any-return]
+
+    def depth(self) -> int:
+        """Return the depth of this node in the tree.
+
+        Returns ``0`` for root nodes (no parent).
+        """
+        d = 0
+        node = self.parent
+        while node is not None:
+            d += 1
+            node = node.parent
+        return d
+
+    def index(self) -> int:
+        """Return the position of this node among its siblings.
+
+        Returns ``0`` for root-level nodes that are not attached
+        to a document.
+        """
+        if self.parent is not None:
+            for i, child in enumerate(self.parent.children):
+                if child is self:
+                    return i
+            return -1
+        if self._document is not None:
+            for i, root_node in enumerate(self._document.nodes):
+                if root_node is self:
+                    return i
+        return 0
+
+    def siblings(self) -> tuple[KdlNode, ...]:
+        """Return the sibling tuple containing this node.
+
+        For child nodes, returns ``parent.children``.  For root-level
+        nodes attached to a document, returns ``document.nodes``.
+        """
+        if self.parent is not None:
+            return self.parent.children
+        if self._document is not None:
+            return self._document.nodes  # type: ignore[no-any-return]
+        return (self,)
+
+    def iter_descendants(self) -> Iterator[KdlNode]:
+        """Iterate all descendant nodes in pre-order (depth-first).
+
+        Yields:
+            Each descendant :class:`KdlNode`, parent before children.
+        """
+        stack: list[KdlNode] = list(reversed(self.children))
+        while stack:
+            node = stack.pop()
+            yield node
+            for child in reversed(node.children):
+                stack.append(child)
+
+    def parents(self) -> list[KdlNode]:
+        """Return all ancestors from direct parent up to root.
+
+        Returns:
+            List of :class:`KdlNode` starting with the direct parent
+            and ending with the root node.  Empty for root nodes.
+        """
+        result: list[KdlNode] = []
+        node = self.parent
+        while node is not None:
+            result.append(node)
+            node = node.parent
+        return result
+
+    # ------------------------------------------------------------------
+    # Selector-based parent queries
+    # ------------------------------------------------------------------
+
+    def matches(self, selector: str) -> bool:
+        """Check whether this node matches a CSS3-like selector.
+
+        Args:
+            selector: A CSS3-compatible selector string.
+
+        Returns:
+            ``True`` if this node matches the selector.
+
+        Raises:
+            SelectorError: If the selector syntax is invalid.
+        """
+        from .selector import SelectorMatcher, _SingleNodeContext, _parse_selector
+
+        sel = _parse_selector(selector)
+        ctx = _SingleNodeContext(self)
+        matcher = SelectorMatcher(ctx)
+        return any(matcher._matches_complex(self, cs) for cs in sel.selectors)
+
+    def closest(self, selector: str) -> KdlNode | None:
+        """Walk up the parent chain and return the first matching ancestor.
+
+        Checks this node first, then walks upward.  Equivalent to the
+        DOM ``Element.closest()`` method.
+
+        Args:
+            selector: A CSS3-compatible selector string.
+
+        Returns:
+            The first ancestor (or self) matching the selector, or
+            ``None`` if no match is found.
+
+        Raises:
+            SelectorError: If the selector syntax is invalid.
+        """
+        node: KdlNode | None = self
+        while node is not None:
+            if node.matches(selector):
+                return node
+            node = node.parent
+        return None
 
     def select(self, selector: str) -> list[KdlNode]:
         """Select descendant nodes matching a CSS3-like selector.

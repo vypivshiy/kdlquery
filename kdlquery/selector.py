@@ -30,37 +30,52 @@ class MatchContext(Protocol):
 
 
 class _SubtreeContext:
+    __slots__ = ("_node",)
+
     def __init__(self, node: KdlNode) -> None:
         self._node = node
-        self._parent_map: dict[int, KdlNode] = {}
-        self._build_maps()
-
-    def _build_maps(self) -> None:
-        stack: list[tuple[KdlNode, KdlNode]] = []
-        for child in reversed(self._node.children):
-            stack.append((child, self._node))
-        while stack:
-            node, parent = stack.pop()
-            self._parent_map[id(node)] = parent
-            for child in reversed(node.children):
-                stack.append((child, node))
 
     def iter_nodes(self) -> Iterator[KdlNode]:
-        stack: list[KdlNode] = list(reversed(self._node.children))
-        while stack:
-            node = stack.pop()
-            yield node
-            for child in reversed(node.children):
-                stack.append(child)
+        return self._node.iter_descendants()
 
     def parent_of(self, node: KdlNode) -> KdlNode | None:
-        return self._parent_map.get(id(node))
+        if node is self._node:
+            return None  # boundary: don't traverse above subtree root
+        return node.parent
 
     def siblings_of(self, node: KdlNode) -> tuple[KdlNode, ...]:
-        parent = self._parent_map.get(id(node))
+        parent = node.parent
         if parent is not None:
             return parent.children
         return self._node.children
+
+    def index_of(self, node: KdlNode) -> int:
+        siblings = self.siblings_of(node)
+        for i, s in enumerate(siblings):
+            if s is node:
+                return i
+        return -1
+
+
+class _SingleNodeContext:
+    """MatchContext for a single node, used by :meth:`KdlNode.matches`."""
+
+    __slots__ = ("_node",)
+
+    def __init__(self, node: KdlNode) -> None:
+        self._node = node
+
+    def iter_nodes(self) -> Iterator[KdlNode]:
+        yield self._node
+
+    def parent_of(self, node: KdlNode) -> KdlNode | None:
+        return node.parent
+
+    def siblings_of(self, node: KdlNode) -> tuple[KdlNode, ...]:
+        parent = node.parent
+        if parent is not None:
+            return parent.children
+        return (node,)
 
     def index_of(self, node: KdlNode) -> int:
         siblings = self.siblings_of(node)
