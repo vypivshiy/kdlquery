@@ -184,6 +184,7 @@ class KDLLexer:
                 f"Unexpected character {ch!r}",
                 line=pos.line,
                 col=pos.column,
+                code="unexpected-character",
             )
 
         eof = self.c.pos()
@@ -201,6 +202,7 @@ class KDLLexer:
                 "Disallowed literal BOM U+FEFF outside document start",
                 line=pos.line,
                 col=pos.column,
+                code="bom-outside-start",
             )
 
         if 0xD800 <= cp <= 0xDFFF:
@@ -209,6 +211,7 @@ class KDLLexer:
                 "Disallowed surrogate code point",
                 line=pos.line,
                 col=pos.column,
+                code="surrogate-codepoint",
             )
 
         if (0x0000 <= cp <= 0x0008) or (0x000E <= cp <= 0x001F) or cp == 0x007F:
@@ -217,6 +220,7 @@ class KDLLexer:
                 f"Disallowed control code point U+{cp:04X}",
                 line=pos.line,
                 col=pos.column,
+                code="control-codepoint",
             )
 
         if (
@@ -229,6 +233,7 @@ class KDLLexer:
                 f"Disallowed direction-control code point U+{cp:04X}",
                 line=pos.line,
                 col=pos.column,
+                code="direction-control-codepoint",
             )
 
     def _single(self, typ: TokenType, n: int = 1) -> Token:
@@ -308,6 +313,7 @@ class KDLLexer:
             "Unterminated block comment",
             line=start.line,
             col=start.column,
+            code="block-comment/unterminated",
         )
 
     def _read_quoted_or_multiline_string(self) -> Token:
@@ -323,6 +329,7 @@ class KDLLexer:
                     'Multiline string must begin with a newline immediately after opening """',
                     line=start.line,
                     col=start.column,
+                    code="multiline-string/no-leading-newline",
                 )
             content_start = self.c.i
             while not self.c.eof():
@@ -337,6 +344,7 @@ class KDLLexer:
                             str(exc),
                             line=start.line,
                             col=start.column,
+                            code="multiline-string/decode",
                         ) from exc
                     return Token(
                         TokenType.STRING, raw, value, Span(start, self.c.pos())
@@ -358,6 +366,7 @@ class KDLLexer:
                 "Unterminated multiline string",
                 line=start.line,
                 col=start.column,
+                code="multiline-string/unterminated",
             )
 
         # single-line quoted string
@@ -392,6 +401,7 @@ class KDLLexer:
                     "Newline in quoted string",
                     line=pos.line,
                     col=pos.column,
+                    code="quoted-string/newline",
                 )
             if ch in _NEWLINES:
                 pos = self.c.pos()
@@ -399,6 +409,7 @@ class KDLLexer:
                     "Newline in quoted string",
                     line=pos.line,
                     col=pos.column,
+                    code="quoted-string/newline",
                 )
             if ch == '"':
                 self.c.advance()
@@ -410,6 +421,7 @@ class KDLLexer:
                         str(exc),
                         line=start.line,
                         col=start.column,
+                        code="quoted-string/decode",
                     ) from exc
                 return Token(TokenType.STRING, raw, value, Span(start, self.c.pos()))
             self.c.advance()
@@ -418,6 +430,7 @@ class KDLLexer:
             "Unterminated quoted string",
             line=start.line,
             col=start.column,
+            code="quoted-string/unterminated",
         )
 
     def _read_hash_prefixed(self) -> Token | None:
@@ -482,6 +495,7 @@ class KDLLexer:
                     "Multiline raw string must begin with a newline immediately after opening delimiter",
                     line=start.line,
                     col=start.column,
+                    code="multiline-raw-string/no-leading-newline",
                 )
         content_start = self.c.i
 
@@ -498,6 +512,7 @@ class KDLLexer:
                             str(exc),
                             line=start.line,
                             col=start.column,
+                            code="multiline-raw-string/decode",
                         ) from exc
                 else:
                     value = content
@@ -509,6 +524,7 @@ class KDLLexer:
                     "Newline in single-quote raw string",
                     line=start.line,
                     col=start.column,
+                    code="raw-string/newline",
                 )
             if self.c.startswith("\r\n"):
                 self.c.advance(2)
@@ -519,6 +535,7 @@ class KDLLexer:
             "Unterminated raw string",
             line=start.line,
             col=start.column,
+            code="raw-string/unterminated",
         )
 
     def _try_read_number(self) -> Token | None:
@@ -541,6 +558,7 @@ class KDLLexer:
                         f"Invalid number: {raw!r} immediately followed by {self.c.cur()!r}",
                         line=start.line,
                         col=start.column,
+                        code="number/invalid-trailing",
                     )
                 return Token(typ, raw, value, Span(start, self.c.pos()))
 
@@ -554,6 +572,7 @@ class KDLLexer:
                     f"Invalid number: {raw!r} immediately followed by {self.c.cur()!r}",
                     line=start.line,
                     col=start.column,
+                    code="number/invalid-trailing",
                 )
             norm = raw.replace("_", "")
             value: int | float  # type: ignore[no-redef]
@@ -600,6 +619,7 @@ class KDLLexer:
                 f"Reserved identifier {raw!r} is not valid as a bare identifier in KDL2",
                 line=start.line,
                 col=start.column,
+                code="reserved-bare-identifier",
             )
         return Token(TokenType.IDENT, raw, raw, Span(start, self.c.pos()))
 
@@ -627,14 +647,20 @@ class _Parser:
                 self._parse_discarded_component(allow_node=True)
                 consumed = self._consume_terminators()
                 if not consumed and not self._at(TokenType.EOF):
-                    raise self._error_here("Expected newline or semicolon after node")
+                    raise self._error_here(
+                        "Expected newline or semicolon after node",
+                        code="expected-eol",
+                    )
                 self._skip_separators()
                 continue
 
             nodes.append(self._parse_node())
             consumed = self._consume_terminators()
             if not consumed and not self._at(TokenType.EOF):
-                raise self._error_here("Expected newline or semicolon after node")
+                raise self._error_here(
+                    "Expected newline or semicolon after node",
+                    code="expected-eol",
+                )
             self._skip_separators()
 
         end = self._peek().span.end
@@ -668,6 +694,7 @@ class _Parser:
                     "Unterminated children block",
                     line=tok.span.start.line,
                     col=tok.span.start.column,
+                    code="children-block/unterminated",
                 )
             if tok.typ == TokenType.LBRACE:
                 depth += 1
@@ -702,7 +729,11 @@ class _Parser:
             # Require whitespace before each entry
             next_tok = self._peek()
             if next_tok.span.start.offset == prev_end:
-                raise self._error_tok(next_tok, "Expected whitespace before entry")
+                raise self._error_tok(
+                    next_tok,
+                    "Expected whitespace before entry",
+                    code="expected-whitespace",
+                )
             entry = self._parse_entry()
             prev_end = entry.span.end.offset
             entries.append(entry)
@@ -715,13 +746,17 @@ class _Parser:
                     self._skip_separators()
                     continue
                 raise self._error_here(
-                    "Slashdash in node tail must precede children block"
+                    "Slashdash in node tail must precede children block",
+                    code="slashdash/no-children-block",
                 )
 
             if not self._match(TokenType.LBRACE):
                 break
             if has_children_block:
-                raise self._error_here("Node cannot have multiple children blocks")
+                raise self._error_here(
+                    "Node cannot have multiple children blocks",
+                    code="node/multiple-children-blocks",
+                )
             has_children_block = True
             lbrace = self._prev()
 
@@ -734,7 +769,10 @@ class _Parser:
                     continue
 
                 if self._at(TokenType.EOF):
-                    raise self._error_here("Unterminated children block")
+                    raise self._error_here(
+                        "Unterminated children block",
+                        code="children-block/unterminated",
+                    )
                 children.append(self._parse_node())
                 self._consume_terminators()
                 self._skip_separators()
@@ -784,7 +822,9 @@ class _Parser:
     def _parse_identifier_like(self) -> CSTIdentifier:
         tok = self._peek()
         if not self._is_identifier_token(tok):
-            raise self._error_tok(tok, f"Expected identifier, got {tok.typ}")
+            raise self._error_tok(
+                tok, f"Expected identifier, got {tok.typ}", code="expected-identifier"
+            )
         self._advance()
         return CSTIdentifier(value=str(tok.value), raw=tok.raw, span=tok.span)
 
@@ -822,7 +862,9 @@ class _Parser:
                 )
             return CSTIdentifier(value=str(tok.value), raw=tok.raw, span=tok.span)
 
-        raise self._error_tok(tok, f"Expected value, got {tok.typ}")
+        raise self._error_tok(
+            tok, f"Expected value, got {tok.typ}", code="expected-value"
+        )
 
     def _is_node_terminator(self) -> bool:
         return (
@@ -868,7 +910,9 @@ class _Parser:
     def _expect(self, typ: TokenType) -> Token:
         tok = self._peek()
         if tok.typ != typ:
-            raise self._error_tok(tok, f"Expected {typ}, got {tok.typ}")
+            raise self._error_tok(
+                tok, f"Expected {typ}, got {tok.typ}", code="expected-token"
+            )
         return self._advance()
 
     def _advance(self) -> Token:
@@ -887,15 +931,16 @@ class _Parser:
             return self.tokens[0]
         return self.tokens[self.i - 1]
 
-    def _error_tok(self, tok: Token, message: str) -> KDLParseError:
+    def _error_tok(self, tok: Token, message: str, *, code: str = "") -> KDLParseError:
         return KDLParseError(
             message,
             line=tok.span.start.line,
             col=tok.span.start.column,
+            code=code,
         )
 
-    def _error_here(self, message: str) -> KDLParseError:
-        return self._error_tok(self._peek(), message)
+    def _error_here(self, message: str, *, code: str = "") -> KDLParseError:
+        return self._error_tok(self._peek(), message, code=code)
 
 
 def _parse_int_like(raw: str, base: int) -> int:
