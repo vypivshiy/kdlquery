@@ -328,6 +328,22 @@ cst = KDL2CSTParser().parse('node "value" key=42')
 # cst.nodes[0].entries — raw CST entries with exact positions
 ```
 
+### Structured parse errors
+
+`KDLParseError` carries a stable machine-readable `code` and a human-readable `hint`, so downstream tools can branch on the category instead of pattern-matching error text.
+
+```python
+from kdlquery import parse, KDLParseError
+
+try:
+    parse(r'foo re #"(\d+)"')          # missing trailing #
+except KDLParseError as e:
+    e.code   # "raw-string/unterminated"
+    e.hint   # actionable, non-empty string
+```
+
+`PARSE_ERROR_CODES` (a `frozenset[str]`) enumerates all 26 categories. See `llm.txt` for the full code → hint table.
+
 ## Selector reference
 
 ```

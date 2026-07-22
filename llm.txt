@@ -157,9 +157,57 @@ class MyReader(Reader[dict, dict]):
         return nodes
 ```
 
-## Conventions
+## Parse error codes
 
-- `KdlNode` is mutable — nodes carry `parent` references wired after construction.
+`KDLParseError` carries a stable machine-readable `code` (keyword-only, defaults to `""` for backward compatibility) and a human-readable `hint` looked up from a central table. Downstream tools should branch on `code`, not on `msg` text.
+
+```python
+from kdlquery import parse, KDLParseError, PARSE_ERROR_CODES
+
+try:
+    parse(r'foo re #"(\d+)"')          # missing trailing #
+except KDLParseError as e:
+    e.code   # "raw-string/unterminated"
+    e.hint   # actionable, non-empty string
+    e.msg    # "Unterminated raw string"
+    e.line   # 1
+    e.col    # 7
+```
+
+`PARSE_ERROR_CODES` is a `frozenset[str]` of all category codes — useful for self-doc and exhaustiveness checks.
+
+Codes are path-like, lowercase-kebab, and extensible. Adding a new category = one row in `_PARSE_ERROR_HINTS` (`kdlquery/types.py`) + one `code="..."` emit site in the parser.
+
+| code | hint (summary) |
+|------|----------------|
+| `raw-string/unterminated` | KDL raw strings need a matching trailing `#` per leading `#` |
+| `raw-string/newline` | single-line raw strings cannot span lines |
+| `multiline-raw-string/no-leading-newline` | multiline raw body must start with `\n` after opening delimiter |
+| `multiline-raw-string/decode` | multiline raw body violates KDL2 indent/escape rules |
+| `quoted-string/unterminated` | quoted string missing closing `"` |
+| `quoted-string/newline` | quoted strings cannot contain a literal newline |
+| `quoted-string/decode` | invalid escape sequence in quoted string |
+| `multiline-string/no-leading-newline` | multiline string body must start with `\n` after opening `"""` |
+| `multiline-string/unterminated` | multiline string missing closing `"""` |
+| `multiline-string/decode` | multiline string body violates KDL2 indent/escape rules |
+| `block-comment/unterminated` | `/* ... */` missing closing `*/` |
+| `unexpected-character` | character not valid in KDL2 at this position |
+| `bom-outside-start` | U+FEFF only permitted as first code point |
+| `surrogate-codepoint` | lone UTF-16 surrogates not allowed |
+| `control-codepoint` | C0/C1 control chars (except tab/newline) not allowed |
+| `direction-control-codepoint` | bidi control chars not allowed |
+| `number/invalid-trailing` | number literal followed by identifier char without delimiter |
+| `reserved-bare-identifier` | reserved identifier (`true`/`false`/`null`/`inf`/`nan`/`-inf`) not valid as bare ident |
+| `children-block/unterminated` | `{ ... }` missing closing `}` |
+| `node/multiple-children-blocks` | a node may have at most one children block |
+| `expected-eol` | expected newline / semicolon / EOF after node |
+| `expected-whitespace` | KDL2 requires whitespace between entries |
+| `slashdash/no-children-block` | trailing `/` must be followed by a children block |
+| `expected-identifier` | expected an identifier at this position |
+| `expected-value` | expected a value (string/number/bool/null) at this position |
+| `expected-token` | unexpected token — parser expected a specific token |
+
+## Conventions
 - `KdlValue` is frozen (immutable).
 - `MappingProxyType` for node properties (read-only dict).
 - `tuple` for node `args` and `children`.
