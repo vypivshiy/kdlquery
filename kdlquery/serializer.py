@@ -121,9 +121,13 @@ def _is_bare_ident(s: str) -> bool:
     if not s or s in _RESERVED_BARE_IDS:
         return False
     first = s[0]
-    if first.isdigit() or first in _DISALLOWED_IDENT_CHARS:
-        return False
-    if _is_disallowed_literal(first):
+    if (
+        first.isdigit()
+        or first in _DISALLOWED_IDENT_CHARS
+        or first in _UNICODE_SPACES
+        or first in _NEWLINES
+        or _is_disallowed_literal(first)
+    ):
         return False
     if first in "+-" and len(s) > 1:
         if s[1].isdigit():
