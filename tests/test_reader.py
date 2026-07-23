@@ -57,7 +57,7 @@ class TestKdlNodeFromCst:
         assert node.args[0].value == "hello"
         assert node.properties["count"].value == 5
         assert node.type_annotation is None
-        assert node.children == ()
+        assert node.children == []
 
     def test_node_with_type_annotation(self) -> None:
         doc = KDL2CSTParser().parse('(published)date "1970-01-01"')
@@ -187,7 +187,7 @@ top-level 42
         root = document.nodes[0]
         child_a = root.children[0]
         child_b = root.children[1]
-        assert document.siblings_of(child_a) == (child_a, child_b)
+        assert document.siblings_of(child_a) == [child_a, child_b]
         assert document.siblings_of(root) == document.nodes
 
     def test_iter_nodes(self, document: KdlDocument) -> None:

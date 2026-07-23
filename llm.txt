@@ -4,12 +4,13 @@
 
 ## Overview
 
-kdlquery provides four main capabilities:
+kdlquery provides five main capabilities:
 
 1. **Lossless CST parser** (`kdlquery.parser`) — Lexer + recursive-descent parser producing a typed CST with full source spans. Conforms to KDL 2.0 spec.
-2. **Node tree** (`kdlquery.document`) — `KdlDocument` with `KdlNode` objects that carry their own `parent` references. Navigation methods delegate to nodes.
+2. **Node tree** (`kdlquery.document`) — `KdlDocument` with `KdlNode` objects that carry their own `parent` references. Navigation methods delegate to nodes. Containers are mutable (`list` / `dict`) to support tree editing.
 3. **Reader API** (`kdlquery.reader`) — Walk the node tree and transform it into arbitrary Python objects via the `Reader` abstract class. Includes `Walker`, `WalkContext`, diagnostic collection, and `parse_into()` convenience function. `DictReader` (`kdlquery.dict_reader`) produces nested dicts.
 4. **Selector engine** (`kdlquery.selector`) — CSS3-like selectors for querying nodes by name, type annotation, properties, arguments, combinators, and pseudo-classes. Works on both `KdlDocument` (full tree) and `KdlNode` (children subtree only). Lexer → parser → matcher pipeline with LRU-cached selector parsing. `MatchContext` Protocol decouples the matcher from the document.
+5. **Serializer** (`kdlquery.serializer`) — Emit KDL 2.0 text from any `KdlDocument` / `KdlNode` / `KdlValue` via their `to_kdl()` methods. Spec-compliant: bare identifier detection (§3.10), quoted string escapes (`\\ \" \n \r \t \b \f \u{XXXX}`), multi-line dedent, `#true`/`#false`/`#null`/`#inf`/`#nan` keyword numbers, type annotations.
 
 ## Quick start
 
@@ -42,6 +43,13 @@ host.matches("host")               # True
 # Node selectors — scoped to children subtree
 app.select("server > host")        # → [host "localhost", host "127.0.0.1"]
 app.select("*:root")               # → [] (no root concept in subtree)
+
+# Mutation + serialization
+from kdlquery import KdlNode, KdlValue
+app.add_child(KdlNode.create("footer", args=[KdlValue.create(True)]))
+app.set_prop("migrated", KdlValue.create(True))
+doc.to_kdl()                       # → KDL 2.0 text with trailing newline
+app.to_kdl(indent_str="\t")        # → custom indent
 ```
 
 ## Project structure
@@ -51,8 +59,9 @@ kdlquery/
   __init__.py      — Public API: parse(), parse_into(), all major types
   types.py         — CST types: Token, CSTNode, CSTValue, CSTEntry, Span, Position
   parser.py        — KDLLexer, KDL2CSTParser, escape/multiline string decoding
-  document.py      — KdlDocument: select(), select_one(), parent_of(), depth_of(), etc. (delegate to nodes)
-  reader.py        — KdlNode (mutable, parent refs), KdlValue (frozen), Reader ABC, Walker, WalkContext, parse_into()
+  document.py      — KdlDocument: select(), select_one(), parent_of(), depth_of(), mutation (add_node/insert_node/remove_node), to_kdl()
+  reader.py        — KdlNode (mutable, parent refs, mutators, create(), to_kdl()), KdlValue (frozen, create()/keyword(), to_kdl()), _Keyword sentinel, Reader ABC, Walker, WalkContext, parse_into()
+  serializer.py    — value_to_kdl(), node_to_kdl(), doc_to_kdl(): KDL 2.0 spec-compliant serialization with bare-ident detection, escapes, multiline reindent
   dict_reader.py   — DictReader: KdlNode tree → list of nested dicts
   selector.py      — SelectorLexer, SelectorParser, SelectorMatcher, MatchContext Protocol, _SubtreeContext, _SingleNodeContext + AST types
 tests/
@@ -60,6 +69,7 @@ tests/
   test_selector.py
   test_reader.py
   test_navigation.py
+  test_write.py
 ```
 
 ## Dependencies
@@ -76,12 +86,14 @@ tests/
 
 ### Key types
 
-- **KdlDocument** — Owns the node tree; provides `select()`, `select_one()`, `parent_of()`, `depth_of()`, `index_of()`, `siblings_of()`, `iter_nodes()`. All navigation methods delegate to the node's own methods.
-- **KdlNode** — Mutable node with `name`, `type_annotation`, `args`, `properties`, `children`, `span`, `parent`. Methods:
+- **KdlDocument** — Owns the node tree; provides `select()`, `select_one()`, `parent_of()`, `depth_of()`, `index_of()`, `siblings_of()`, `iter_nodes()`. Mutation: `add_node()`, `insert_node()`, `remove_node()`. Serialization: `to_kdl(indent_str="    ") -> str` (trailing newline; empty doc → `""`).
+- **KdlNode** — Mutable node with `name`, `type_annotation`, `args` (list), `properties` (dict), `children` (list), `span`, `parent`. Methods:
   - Value access: `get_arg(i)`, `get_prop(k)`, `has_prop(k)`, `iter_args()`, `iter_props()`
+  - Mutation: `create(name, *, args=, properties=, children=, type_annotation=)` (classmethod factory), `add_child()`, `insert_child(i,)`, `remove_child(i)`, `add_arg()`, `set_prop(k,)`, `remove_prop(k)`
   - Selector queries: `select(selector)`, `select_one(selector)` — scoped to descendants, cannot access parent or root nodes.
   - Navigation (DOM-like): `root` (property), `document` (property), `depth()`, `index()`, `siblings()`, `iter_descendants()`, `parents()`, `matches(selector)`, `closest(selector)`
-- **KdlValue** — Frozen typed value with `value`, `span`, `type_annotation`.
+  - Serialization: `to_kdl(*, indent=0, indent_str="    ", force_children_block=False) -> str`
+- **KdlValue** — Frozen typed value with `value`, `span`, `type_annotation`. Factories: `create(value, type_annotation=None)` (Python primitive → inferred KDL literal), `keyword(raw)` (raw passthrough wrapped in `_Keyword` sentinel). Serialization: `to_kdl(*, indent=0, indent_str="    ") -> str`.
 - **Reader[T_node, R]** — ABC with `on_node()`, `error_node()`, `finalize()`.
 - **DictReader** — Built-in reader producing `Node` TypedDicts.
 - **SelectorError** — Raised on invalid selector syntax.
@@ -208,12 +220,14 @@ Codes are path-like, lowercase-kebab, and extensible. Adding a new category = on
 | `expected-token` | unexpected token — parser expected a specific token |
 
 ## Conventions
-- `KdlValue` is frozen (immutable).
-- `MappingProxyType` for node properties (read-only dict).
-- `tuple` for node `args` and `children`.
+- `KdlValue` is frozen (immutable); constructed via `KdlValue.create()` or `KdlValue.keyword()`.
+- `KdlNode` is mutable. `args` and `children` are `list[KdlValue]` / `list[KdlNode]`; `properties` is `dict[str, KdlValue]`. `KdlDocument.nodes` is `list[KdlNode]`.
+- Mutators (`add_child`, `insert_child`, `add_node`, etc.) wire `parent` and `_document` back-references on inserted subtrees automatically.
+- `_EMPTY_SPAN` (sentinel) is the default span for synthetic nodes/values produced via `create()`/`KdlNode.create()`.
 - Source spans (`Span(start=Position, end=Position)`) on every CST node and high-level node.
 - Selector parsing is cached with `functools.lru_cache`.
 - KDL 2.0 spec features: slashdash comments, esclines, multiline strings, raw strings, type annotations, unicode whitespace.
+- Serializer is spec-compliant but not byte-identical round-trip: comments (`//`, `/* */`, `/-`), raw-string variants, hex/octal/binary number formats, BOM, and version markers are normalized away.
 
 ## License
 

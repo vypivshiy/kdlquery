@@ -2,7 +2,7 @@
 
 A pure Python [KDL 2.0](https://kdl.dev/spec) parser with a CSS3-like selector API.
 
-kdlquery provides a lossless CST parser, a node tree with parent/sibling navigation, a Reader API for transforming KDL documents into arbitrary Python objects, and a selector engine for querying nodes by name, type annotation, properties, arguments, combinators, and pseudo-classes.
+kdlquery provides a lossless CST parser, a mutable node tree with parent/sibling navigation, a Reader API for transforming KDL documents into arbitrary Python objects, a selector engine for querying nodes by name, type annotation, properties, arguments, combinators, and pseudo-classes, and a spec-compliant serializer for emitting KDL 2.0 text from any node tree (parsed or built from scratch).
 
 Designed as a foundation for building DSLs — KDL is a good fit for configuration, schemas, and structured data. The parser and selector API together cover the common cases of parsing, validating, and linting KDL documents.
 
@@ -82,7 +82,7 @@ for server in app.children:
 doc.parent_of(app.children[0]) is app   # True
 doc.depth_of(app)                        # 0
 doc.index_of(app.children[1])            # 1
-doc.siblings_of(app.children[0])         # (child_0, child_1, ...)
+doc.siblings_of(app.children[0])         # [child_0, child_1, ...]
 ```
 
 ### Selector API
@@ -240,7 +240,7 @@ host.depth()                          # 2
 
 # Position among siblings
 server.index()                        # 0
-host.siblings()                       # (host, host, timeout)
+host.siblings()                       # [host, host, timeout]
 
 # Iterate descendants
 list(app.iter_descendants())          # all nodes under app
@@ -315,6 +315,86 @@ class ConfigReader(Reader[dict, dict]):
 
     def finalize(self, nodes, diagnostics):
         return {n["id"]: n for n in nodes if "id" in n}
+```
+
+### Mutation and serialization
+
+`KdlNode`, `KdlValue`, and `KdlDocument` are mutable. Node containers (`args`, `properties`, `children`, `nodes`) are plain Python `list`/`dict` — you can build, edit, and re-emit any KDL tree without going through the parser.
+
+**Building nodes from scratch:**
+
+```python
+from kdlquery import KdlNode, KdlValue
+
+node = KdlNode.create(
+    "@check",
+    args=[KdlValue.create("exists")],
+    children=[
+        KdlNode.create("css", args=[KdlValue.create(".foo")]),
+        KdlNode.create("to-bool"),
+        KdlNode.create("fallback", args=[KdlValue.create(False)]),
+    ],
+)
+```
+
+`KdlValue.create()` accepts Python primitives (`bool`, `None`, `int`, `float`, `str`) and infers the KDL literal at serialization time. For raw passthrough of an arbitrary keyword (`#true`, `#null`, `#inf`, or implementation-defined), use `KdlValue.keyword("#custom")` — the string is emitted verbatim.
+
+**Mutating an existing tree:**
+
+```python
+doc = parse(source)
+struct = doc.select_one("struct")
+
+# Insert children — parent and document back-refs are wired automatically.
+struct.insert_child(0, KdlNode.create("@request", args=[KdlValue.create("GET /")]))
+struct.add_child(KdlNode.create("note", args=[KdlValue.create("added")]))
+
+# Properties and arguments
+struct.set_prop("migrated", KdlValue.create(True))
+struct.add_arg(KdlValue.create(42))
+struct.remove_prop("legacy")
+
+# Top-level nodes
+doc.add_node(KdlNode.create("footer"))
+doc.remove_node(0)
+```
+
+Mutation methods: `KdlNode.add_child` / `insert_child` / `remove_child` / `add_arg` / `set_prop` / `remove_prop`; `KdlDocument.add_node` / `insert_node` / `remove_node`. Each mutator propagates `parent` and `document` back-references to the inserted subtree.
+
+**Serializing back to KDL 2.0:**
+
+```python
+node.to_kdl()                  # single node → str
+doc.to_kdl()                   # whole document → str (trailing newline)
+
+# Options
+node.to_kdl(indent_str="\t")                  # custom indent (default 4 spaces)
+node.to_kdl(force_children_block=True)        # emit `name {}` when no children
+```
+
+The serializer is KDL 2.0 spec-compliant:
+
+- Booleans / null → `#true` / `#false` / `#null`; floats handle `#inf` / `#-inf` / `#nan`.
+- Bare identifier detection per §3.10 (reserved keywords, digit-leading, sign rules).
+- Quoted strings escape `\\ \" \n \r \t \b \f` and `\u{XXXX}` for disallowed code points; lone surrogates raise `ValueError`.
+- Multi-line strings (`"""..."""`) for any value containing `\n`, with depth-aware reindentation.
+- Type annotations on nodes and values (`(u8) 123`, `(published)date`).
+- Round-trip safe: `parse(doc.to_kdl())` produces a semantically equivalent tree (not byte-identical — comments, raw-string variants, and hex/octal/binary number formats are normalized away).
+
+**Migration example:**
+
+```python
+from kdlquery import parse, KdlNode, KdlValue
+
+doc = parse('struct "old" {}')
+struct = doc.nodes[0]
+struct.insert_child(0, KdlNode.create("@request", args=[KdlValue.create("GET /")]))
+struct.insert_child(1, KdlNode.create("@check", args=[KdlValue.create("exists")], children=[
+    KdlNode.create("css", args=[KdlValue.create(".foo")]),
+    KdlNode.create("to-bool"),
+    KdlNode.create("fallback", args=[KdlValue.create(False)]),
+]))
+result = doc.to_kdl()
 ```
 
 ### CST parser

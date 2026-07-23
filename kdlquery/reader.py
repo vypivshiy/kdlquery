@@ -4,7 +4,6 @@ from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from enum import Enum
-from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 from .types import (
@@ -13,11 +12,16 @@ from .types import (
     CSTNode,
     CSTPropEntry,
     CSTValue,
+    Position,
     Span,
 )
 
 if TYPE_CHECKING:
     from .document import KdlDocument
+
+
+# Sentinel span for synthetic (parser-unattached) nodes/values.
+_EMPTY_SPAN: Span = Span(Position(0, 0, 0), Position(0, 0, 0))
 
 
 # ---------------------------------------------------------------------------
@@ -174,6 +178,31 @@ class DiagnosticCollector:
 
 
 # ---------------------------------------------------------------------------
+# _Keyword — raw literal sentinel for KdlValue
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _Keyword:
+    """Marker wrapping a raw KDL literal (e.g. ``#true``, ``#null``, ``#inf``).
+
+    Distinguishes a value that should be emitted verbatim from a Python
+    equivalent that gets converted by the serializer. Used by
+    :meth:`KdlValue.keyword`.
+    """
+
+    raw: str
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, _Keyword):
+            return self.raw == other.raw
+        return NotImplemented
+
+    def __hash__(self) -> int:
+        return hash(("_Keyword", self.raw))
+
+
+# ---------------------------------------------------------------------------
 # KdlValue
 # ---------------------------------------------------------------------------
 
@@ -186,15 +215,75 @@ class KdlValue:
     in the high-level tree model.
 
     Attributes:
-        value: The parsed Python value (str, int, float, bool, or None).
+        value: The parsed Python value (str, int, float, bool, None, or
+            ``_Keyword`` for raw literals such as ``#true``).
         span: Source location of this value in the original document.
+            Defaults to an empty span for synthetic values created via
+            :meth:`create`.
         type_annotation: Raw type annotation string (e.g. ``"(u8)"``),
             or ``None`` if untyped.
     """
 
     value: Any
-    span: Span
+    span: Span = _EMPTY_SPAN
     type_annotation: str | None = None
+
+    @classmethod
+    def create(
+        cls,
+        value: Any,
+        type_annotation: str | None = None,
+    ) -> "KdlValue":
+        """Build a synthetic KdlValue from a Python value.
+
+        ``True``/``False``/``None``/``int``/``float``/``str`` are
+        accepted as-is and serialized via type inference. For raw KDL
+        literal passthrough (e.g. a custom ``#foo`` keyword), use
+        :meth:`keyword` instead.
+
+        Args:
+            value: A Python primitive to wrap.
+            type_annotation: Optional raw type annotation like ``"(u8)"``.
+
+        Returns:
+            A frozen KdlValue with an empty span.
+        """
+        return cls(value=value, type_annotation=type_annotation)
+
+    @classmethod
+    def keyword(cls, raw: str) -> "KdlValue":
+        """Build a KdlValue that emits ``raw`` verbatim during serialization.
+
+        Use for raw KDL literals such as ``#true``, ``#null``, ``#inf``,
+        or implementation-defined keywords. No validation is performed;
+        the caller is responsible for spec compliance.
+
+        Args:
+            raw: The literal text to emit (e.g. ``"#null"``).
+
+        Returns:
+            A frozen KdlValue wrapping a :class:`_Keyword` marker.
+        """
+        return cls(value=_Keyword(raw))
+
+    def to_kdl(
+        self,
+        *,
+        indent: int = 0,
+        indent_str: str = "    ",
+    ) -> str:
+        """Serialize this value to KDL 2.0 text.
+
+        Args:
+            indent: Current depth for multi-line string reindentation.
+            indent_str: Indentation unit (default 4 spaces).
+
+        Returns:
+            KDL 2.0 representation of this value.
+        """
+        from .serializer import value_to_kdl
+
+        return value_to_kdl(self, indent=indent, indent_str=indent_str)
 
 
 # ---------------------------------------------------------------------------
@@ -209,6 +298,12 @@ class KdlNode:
     Corresponds to a single KDL node with its name, optional type annotation,
     positional arguments, named properties, and child nodes.
 
+    Containers (``args``, ``properties``, ``children``) are mutable to
+    support tree editing. Use :meth:`create` for synthetic nodes and
+    the ``add_*``/``insert_*``/``remove_*``/``set_prop`` methods for
+    mutation; each method wires parent and document back-references
+    automatically.
+
     Attributes:
         name: Node identifier string.
         type_annotation: Raw type annotation on the node itself, or ``None``.
@@ -220,11 +315,11 @@ class KdlNode:
     """
 
     name: str
-    type_annotation: str | None
-    args: tuple[KdlValue, ...]
-    properties: MappingProxyType[str, KdlValue]
-    children: tuple[KdlNode, ...]
-    span: Span
+    type_annotation: str | None = None
+    args: list[KdlValue] = field(default_factory=list)
+    properties: dict[str, KdlValue] = field(default_factory=dict)
+    children: list[KdlNode] = field(default_factory=list)
+    span: Span = _EMPTY_SPAN
     parent: KdlNode | None = field(
         default=None,
         init=False,
@@ -263,7 +358,8 @@ class KdlNode:
             node: The CST node to convert.
 
         Returns:
-            A frozen KdlNode with all entries and children converted.
+            A KdlNode with all entries and children converted. The
+            returned node (and its subtree) is mutable.
         """
         args: list[KdlValue] = []
         properties: dict[str, KdlValue] = {}
@@ -284,19 +380,145 @@ class KdlNode:
                     type_annotation=cls._value_type_annotation(entry.value),
                 )
 
-        children = tuple(cls.from_cst(c) for c in node.children)
+        children = [cls.from_cst(c) for c in node.children]
         type_ann = node.type_annotation.raw if node.type_annotation else None
 
         instance = cls(
             name=node.name.value,
             type_annotation=type_ann,
-            args=tuple(args),
-            properties=MappingProxyType(properties),
+            args=args,
+            properties=properties,
             children=children,
             span=node.span,
         )
         instance._wire_parents()
         return instance
+
+    @classmethod
+    def create(
+        cls,
+        name: str,
+        *,
+        args: list[KdlValue] | tuple[KdlValue, ...] | None = None,
+        properties: dict[str, KdlValue] | None = None,
+        children: list[KdlNode] | tuple[KdlNode, ...] | None = None,
+        type_annotation: str | None = None,
+    ) -> KdlNode:
+        """Build a synthetic KdlNode without a CST.
+
+        Args:
+            name: Node name (must be a non-empty KDL string).
+            args: Optional iterable of positional KdlValue arguments.
+                Copied into a fresh list.
+            properties: Optional mapping of property name to KdlValue.
+                Copied into a fresh dict.
+            children: Optional iterable of child KdlNode. Copied into a
+                fresh list; their ``parent`` is wired to the new node.
+            type_annotation: Optional raw node type annotation.
+
+        Returns:
+            A new KdlNode with parent references wired for children.
+        """
+        node = cls(
+            name=name,
+            type_annotation=type_annotation,
+            args=list(args) if args else [],
+            properties=dict(properties) if properties else {},
+            children=list(children) if children else [],
+        )
+        node._wire_parents()
+        return node
+
+    # ------------------------------------------------------------------
+    # Mutation API
+    # ------------------------------------------------------------------
+
+    def _propagate_document(self, child: KdlNode) -> None:
+        """Inherit document reference from this node into ``child``."""
+        if self._document is not None:
+            child._document = self._document
+            for grandchild in child.children:
+                self._propagate_document(grandchild)
+
+    def add_child(self, child: KdlNode) -> KdlNode:
+        """Append ``child`` to :attr:`children` and wire back-references.
+
+        Args:
+            child: The KdlNode to append.
+
+        Returns:
+            The appended child (for chaining).
+        """
+        self.children.append(child)
+        child.parent = self
+        self._propagate_document(child)
+        return child
+
+    def insert_child(self, index: int, child: KdlNode) -> KdlNode:
+        """Insert ``child`` at ``index`` within :attr:`children`.
+
+        Args:
+            index: Zero-based insertion position (negative indices
+                follow Python list semantics).
+            child: The KdlNode to insert.
+
+        Returns:
+            The inserted child (for chaining).
+        """
+        self.children.insert(index, child)
+        child.parent = self
+        self._propagate_document(child)
+        return child
+
+    def remove_child(self, index: int) -> KdlNode:
+        """Remove and return the child at ``index``.
+
+        Args:
+            index: Zero-based position of the child to remove.
+
+        Returns:
+            The removed KdlNode. Its ``parent`` is cleared.
+        """
+        child = self.children.pop(index)
+        child.parent = None
+        child._document = None
+        return child
+
+    def add_arg(self, value: KdlValue) -> None:
+        """Append a positional argument.
+
+        Args:
+            value: The KdlValue to append to :attr:`args`.
+        """
+        self.args.append(value)
+
+    def set_prop(self, key: str, value: KdlValue) -> None:
+        """Set or replace a named property.
+
+        Args:
+            key: Property name.
+            value: The KdlValue to associate with ``key``.
+        """
+        self.properties[key] = value
+
+    def remove_prop(self, key: str) -> bool:
+        """Remove a named property.
+
+        Args:
+            key: Property name to remove.
+
+        Returns:
+            ``True`` if the property existed and was removed, ``False``
+            otherwise.
+        """
+        if key in self.properties:
+            del self.properties[key]
+            return True
+        return False
+
+    # ------------------------------------------------------------------
+    # Argument / property accessors
+    # ------------------------------------------------------------------
 
     def get_arg(self, index: int, default: Any = None) -> Any:
         """Get a positional argument value by index.
@@ -420,8 +642,8 @@ class KdlNode:
                     return i
         return 0
 
-    def siblings(self) -> tuple[KdlNode, ...]:
-        """Return the sibling tuple containing this node.
+    def siblings(self) -> list[KdlNode]:
+        """Return the sibling list containing this node.
 
         For child nodes, returns ``parent.children``.  For root-level
         nodes attached to a document, returns ``document.nodes``.
@@ -430,7 +652,7 @@ class KdlNode:
             return self.parent.children
         if self._document is not None:
             return self._document.nodes  # type: ignore[no-any-return]
-        return (self,)
+        return [self]
 
     def iter_descendants(self) -> Iterator[KdlNode]:
         """Iterate all descendant nodes in pre-order (depth-first).
@@ -458,6 +680,38 @@ class KdlNode:
             result.append(node)
             node = node.parent
         return result
+
+    # ------------------------------------------------------------------
+    # Serialization
+    # ------------------------------------------------------------------
+
+    def to_kdl(
+        self,
+        *,
+        indent: int = 0,
+        indent_str: str = "    ",
+        force_children_block: bool = False,
+    ) -> str:
+        """Serialize this node (and its subtree) to KDL 2.0 text.
+
+        Args:
+            indent: Starting depth for indentation.
+            indent_str: Indentation unit (default 4 spaces).
+            force_children_block: When ``True``, emit an empty ``{}``
+                block even if :attr:`children` is empty. Only honored
+                for the top-level node (not propagated to descendants).
+
+        Returns:
+            KDL 2.0 representation of this node.
+        """
+        from .serializer import node_to_kdl
+
+        return node_to_kdl(
+            self,
+            indent=indent,
+            indent_str=indent_str,
+            force_children_block=force_children_block,
+        )
 
     # ------------------------------------------------------------------
     # Selector-based parent queries

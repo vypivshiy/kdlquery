@@ -186,8 +186,8 @@ class TestNodeSiblings:
         root = doc.nodes[0]
         child_a = root.children[0]
         child_b = root.children[1]
-        assert child_a.siblings() == (child_a, child_b)
-        assert child_b.siblings() == (child_a, child_b)
+        assert child_a.siblings() == [child_a, child_b]
+        assert child_b.siblings() == [child_a, child_b]
 
     def test_agrees_with_document_siblings_of(self, doc: KdlDocument) -> None:
         for node in doc.iter_nodes():

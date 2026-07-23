@@ -25,7 +25,7 @@ class SelectorError(ValueError):
 class MatchContext(Protocol):
     def iter_nodes(self) -> Iterator[KdlNode]: ...
     def parent_of(self, node: KdlNode) -> KdlNode | None: ...
-    def siblings_of(self, node: KdlNode) -> tuple[KdlNode, ...]: ...
+    def siblings_of(self, node: KdlNode) -> list[KdlNode]: ...
     def index_of(self, node: KdlNode) -> int: ...
 
 
@@ -43,7 +43,7 @@ class _SubtreeContext:
             return None  # boundary: don't traverse above subtree root
         return node.parent
 
-    def siblings_of(self, node: KdlNode) -> tuple[KdlNode, ...]:
+    def siblings_of(self, node: KdlNode) -> list[KdlNode]:
         parent = node.parent
         if parent is not None:
             return parent.children
@@ -71,11 +71,11 @@ class _SingleNodeContext:
     def parent_of(self, node: KdlNode) -> KdlNode | None:
         return node.parent
 
-    def siblings_of(self, node: KdlNode) -> tuple[KdlNode, ...]:
+    def siblings_of(self, node: KdlNode) -> list[KdlNode]:
         parent = node.parent
         if parent is not None:
             return parent.children
-        return (node,)
+        return [node]
 
     def index_of(self, node: KdlNode) -> int:
         siblings = self.siblings_of(node)

@@ -4,7 +4,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 
 from .types import CSTDocument, Span
-from .reader import KdlNode
+from .reader import KdlNode, _EMPTY_SPAN
 
 
 @dataclass
@@ -15,12 +15,15 @@ class KdlDocument:
     maintains separate parent/depth maps.
 
     Attributes:
-        nodes: Top-level nodes of the document, in source order.
+        nodes: Top-level nodes of the document, in source order. Mutable
+            list — use :meth:`add_node` / :meth:`insert_node` /
+            :meth:`remove_node` for editing so document back-references
+            stay consistent.
         span: Source location spanning the entire document.
     """
 
-    nodes: tuple[KdlNode, ...]
-    span: Span
+    nodes: list[KdlNode]
+    span: Span = _EMPTY_SPAN
 
     @classmethod
     def from_cst(cls, cst_doc: CSTDocument) -> KdlDocument:
@@ -35,7 +38,7 @@ class KdlDocument:
         Returns:
             A fully initialized KdlDocument.
         """
-        nodes = tuple(KdlNode.from_cst(n) for n in cst_doc.nodes)
+        nodes = [KdlNode.from_cst(n) for n in cst_doc.nodes]
         doc = cls(nodes=nodes, span=cst_doc.span)
         doc._wire_document_refs()
         return doc
@@ -44,6 +47,64 @@ class KdlDocument:
         """Set ``_document`` back-reference on all nodes."""
         for node in self.iter_nodes():
             node._document = self
+
+    # ------------------------------------------------------------------
+    # Mutation API
+    # ------------------------------------------------------------------
+
+    def add_node(self, node: KdlNode) -> KdlNode:
+        """Append a top-level node to this document.
+
+        Args:
+            node: The KdlNode to append. Its ``_document`` back-reference
+                is set to this document (recursively for its subtree).
+
+        Returns:
+            The appended node (for chaining).
+        """
+        self.nodes.append(node)
+        node._document = self
+        for descendant in node.iter_descendants():
+            descendant._document = self
+        return node
+
+    def insert_node(self, index: int, node: KdlNode) -> KdlNode:
+        """Insert a top-level node at ``index``.
+
+        Args:
+            index: Zero-based insertion position (negative indices
+                follow Python list semantics).
+            node: The KdlNode to insert. Document back-references are
+                wired as in :meth:`add_node`.
+
+        Returns:
+            The inserted node (for chaining).
+        """
+        self.nodes.insert(index, node)
+        node._document = self
+        for descendant in node.iter_descendants():
+            descendant._document = self
+        return node
+
+    def remove_node(self, index: int) -> KdlNode:
+        """Remove and return the top-level node at ``index``.
+
+        Args:
+            index: Zero-based position of the node to remove.
+
+        Returns:
+            The removed KdlNode. Its ``_document`` back-reference (and
+            that of its descendants) is cleared.
+        """
+        node = self.nodes.pop(index)
+        node._document = None
+        for descendant in node.iter_descendants():
+            descendant._document = None
+        return node
+
+    # ------------------------------------------------------------------
+    # Queries
+    # ------------------------------------------------------------------
 
     def parent_of(self, node: KdlNode) -> KdlNode | None:
         """Return the parent of a node.
@@ -90,8 +151,8 @@ class KdlDocument:
                 return i
         return -1
 
-    def siblings_of(self, node: KdlNode) -> tuple[KdlNode, ...]:
-        """Return the sibling tuple containing the given node.
+    def siblings_of(self, node: KdlNode) -> list[KdlNode]:
+        """Return the sibling list containing the given node.
 
         For root-level nodes, returns ``self.nodes``. For child nodes,
         returns ``parent.children``.
@@ -101,7 +162,7 @@ class KdlDocument:
                 owned by this document.
 
         Returns:
-            Tuple of sibling nodes (includes the node itself).
+            List of sibling nodes (includes the node itself).
         """
         parent = node.parent
         if parent is not None:
@@ -156,6 +217,26 @@ class KdlDocument:
 
         sel = _parse_selector(selector)
         return SelectorMatcher(self).match_one(sel)
+
+    # ------------------------------------------------------------------
+    # Serialization
+    # ------------------------------------------------------------------
+
+    def to_kdl(self, *, indent_str: str = "    ") -> str:
+        """Serialize this document to KDL 2.0 text.
+
+        Nodes are joined with newlines and terminated by a trailing
+        newline. An empty document serializes to an empty string.
+
+        Args:
+            indent_str: Indentation unit (default 4 spaces).
+
+        Returns:
+            KDL 2.0 representation of the document.
+        """
+        from .serializer import doc_to_kdl
+
+        return doc_to_kdl(self, indent_str=indent_str)
 
 
 __all__ = [
