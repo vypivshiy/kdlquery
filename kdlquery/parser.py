@@ -560,30 +560,30 @@ class KDLLexer:
         )
 
     def _try_read_number(self) -> Token | None:
-        rem = self.c.src[self.c.i :]
+        ch = self.c.cur()
+        if ch == "0" and self.c.peek() in "xXoObB":
+            # Prefer radix numbers before decimal.
+            for typ, rx, base in (
+                (TokenType.NUMBER, _HEX_RE, 16),
+                (TokenType.NUMBER, _OCT_RE, 8),
+                (TokenType.NUMBER, _BIN_RE, 2),
+            ):
+                m = rx.match(self.c.src, pos=self.c.i)
+                if m:
+                    raw = m.group(0)
+                    value = _parse_int_like(raw, base)
+                    start = self.c.pos()
+                    self.c.advance(len(raw))
+                    if _is_ident_continue(self.c.cur()):
+                        raise KDLParseError(
+                            f"Invalid number: {raw!r} immediately followed by {self.c.cur()!r}",
+                            line=start.line,
+                            col=start.column,
+                            code="number/invalid-trailing",
+                        )
+                    return Token(typ, raw, value, Span(start, self.c.pos()))
 
-        # Prefer radix numbers before decimal.
-        for typ, rx, base in (
-            (TokenType.NUMBER, _HEX_RE, 16),
-            (TokenType.NUMBER, _OCT_RE, 8),
-            (TokenType.NUMBER, _BIN_RE, 2),
-        ):
-            m = rx.match(rem)
-            if m:
-                raw = m.group(0)
-                value = _parse_int_like(raw, base)
-                start = self.c.pos()
-                self.c.advance(len(raw))
-                if _is_ident_continue(self.c.cur()):
-                    raise KDLParseError(
-                        f"Invalid number: {raw!r} immediately followed by {self.c.cur()!r}",
-                        line=start.line,
-                        col=start.column,
-                        code="number/invalid-trailing",
-                    )
-                return Token(typ, raw, value, Span(start, self.c.pos()))
-
-        m = _DECIMAL_RE.match(rem)
+        m = _DECIMAL_RE.match(self.c.src, pos=self.c.i)
         if m:
             raw = m.group(0)
             start = self.c.pos()
@@ -648,13 +648,14 @@ class KDLLexer:
 class KDL2CSTParser:
     def parse(self, source: str) -> CSTDocument:
         tokens = KDLLexer(source).tokenize()
-        p = _Parser(tokens)
+        p = _Parser(tokens, source=source)
         return p.parse_document()
 
 
 class _Parser:
-    def __init__(self, tokens: list[Token]):
+    def __init__(self, tokens: list[Token], source: str | None = None):
         self.tokens = tokens
+        self.source = source
         self.i = 0
 
     def parse_document(self) -> CSTDocument:
@@ -857,8 +858,12 @@ class _Parser:
             TokenType.KEYWORD_NUMBER,
         ):
             self._advance()
-            start = ty.span.start if ty else tok.span.start
-            raw = self._slice(start.offset, tok.span.end.offset)
+            if ty:
+                raw = self._slice(ty.span.start.offset, tok.span.end.offset)
+                start = ty.span.start
+            else:
+                raw = tok.raw
+                start = tok.span.start
             return CSTValue(
                 value=tok.value,
                 raw=raw,
@@ -905,6 +910,8 @@ class _Parser:
         return tok.typ in (TokenType.IDENT, TokenType.STRING)
 
     def _slice(self, start: int, end: int) -> str:
+        if self.source is not None:
+            return self.source[start:end]
         # reconstruct from token raws for stable representation
         out: list[str] = []
         for t in self.tokens:
@@ -980,6 +987,8 @@ def _parse_int_like(raw: str, base: int) -> int:
 
 def _decode_escape_body(body: str) -> str:
     """Decode KDL2 escape sequences in an already-stripped string body."""
+    if "\\" not in body:
+        return body
     out: list[str] = []
     i = 0
     while i < len(body):

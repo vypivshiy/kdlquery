@@ -405,3 +405,42 @@ endpoint name="service" \\
         assert len(doc_sameline.nodes) == 1
         assert doc_sameline.nodes[0].name.value == "node"
         assert len(doc_sameline.nodes[0].entries) == 1
+
+
+class TestPhase1Optimizations:
+    def test_escape_fast_path(self) -> None:
+        from kdlquery.parser import _decode_escape_body
+
+        plain = "hello world this is a test without escapes"
+        res = _decode_escape_body(plain)
+        assert res is plain  # Same string object returned via fast-path
+
+        with_escapes = "hello\\nworld"
+        assert _decode_escape_body(with_escapes) == "hello\nworld"
+
+    def test_unannotated_value_raw(self) -> None:
+        doc = KDL2CSTParser().parse('node 123 "hello" #true #null')
+        entries = doc.nodes[0].entries
+        assert [e.value.raw for e in entries] == ["123", '"hello"', "#true", "#null"]
+
+    def test_source_retained_slice(self) -> None:
+        from kdlquery.parser import KDLLexer, _Parser
+
+        source = 'node (my-type)"val"'
+        tokens = KDLLexer(source).tokenize()
+        parser_with_source = _Parser(tokens, source=source)
+        doc = parser_with_source.parse_document()
+        assert doc.nodes[0].entries[0].value.type_annotation is not None
+        assert doc.nodes[0].entries[0].value.type_annotation.raw == "(my-type)"
+
+        # Fallback when source is None
+        parser_no_source = _Parser(tokens)
+        doc_no_source = parser_no_source.parse_document()
+        assert doc_no_source.nodes[0].entries[0].value.type_annotation is not None
+        assert doc_no_source.nodes[0].entries[0].value.type_annotation.raw == "(my-type)"
+
+    def test_radix_and_number_matching(self) -> None:
+        doc = KDL2CSTParser().parse("node 0x1F 0o77 0b101 42 3.14 -10")
+        values = [e.value.value for e in doc.nodes[0].entries]
+        assert values == [0x1F, 0o77, 0b101, 42, 3.14, -10]
+

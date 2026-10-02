@@ -5,11 +5,11 @@ Eliminate the quadratic complexity bottleneck in `_Parser._slice(start, end)` by
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] `_slice(start, end)` operates in O(1) time without looping over all tokens from index 0.
-- [ ] Values without type annotations return `tok.raw` directly.
-- [ ] `_try_read_number` matches regexes with `pos=self.c.i` avoiding full-string tail slices.
-- [ ] Radix checks (`0x`, `0o`, `0b`) are gated by single-character lookahead.
-- [ ] `_decode_escape_body` returns immediately when `\` is not present.
-- [ ] All 403 KDL 2.0 compliance test cases pass without regressions.
+- [x] `_slice(start, end)` operates in O(1) time without looping over all tokens from index 0.
+- [x] Values without type annotations return `tok.raw` directly.
+- [x] `_try_read_number` matches regexes with `pos=self.c.i` avoiding full-string tail slices.
+- [x] Radix checks (`0x`, `0o`, `0b`) are gated by single-character lookahead.
+- [x] `_decode_escape_body` returns immediately when `\` is not present.
+- [x] All 403 KDL 2.0 compliance test cases pass without regressions.
