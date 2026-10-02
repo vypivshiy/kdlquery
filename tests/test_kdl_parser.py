@@ -11,6 +11,7 @@ from kdlquery.types import (
 from kdlquery.parser import (
     KDL2CSTParser,
     KDLLexer,
+    RawToken,
     _build_line_starts,
     _offset_to_position,
     offset_to_position,
@@ -534,3 +535,131 @@ def test_bulk_codepoint_validation_disallowed() -> None:
     assert exc.value.code == "direction-control-codepoint"
     assert exc.value.line == 2
     assert exc.value.col == 3
+
+
+def test_two_tier_lexer_architecture() -> None:
+    from kdlquery.types import Token, TokenType
+
+    source = 'node key="value" 123 #true {\n    /-child;\n}\n'
+    lexer = KDLLexer(source)
+
+    # 1. Fast internal raw-offset tuple stream
+    raw_tokens = lexer.tokenize_raw()
+    assert len(raw_tokens) > 0
+    assert all(isinstance(t, RawToken) for t in raw_tokens)
+    assert all(isinstance(t, tuple) for t in raw_tokens)
+
+    # Verify tuple unpacking
+    first = raw_tokens[0]
+    typ, raw, val, start, end = first
+    assert typ == TokenType.IDENT
+    assert raw == "node"
+    assert val == "node"
+    assert start == 0
+    assert end == 4
+
+    # 2. Public backward-compatible Token stream
+    tokens = lexer.tokenize()
+    assert len(tokens) == len(raw_tokens)
+    assert all(isinstance(t, Token) for t in tokens)
+
+    # Spans match line_starts calculation
+    assert tokens[0].typ == TokenType.IDENT
+    assert tokens[0].span.start.line == 1
+    assert tokens[0].span.start.column == 1
+    assert tokens[0].span.end.offset == 4
+
+
+def test_master_regex_high_frequency_tokens() -> None:
+    from kdlquery.types import TokenType
+
+    source = 'node (my-type)foo key="str" 0x1A 0o77 0b101 42 3.14 -10 #false #null /- bar; \n'
+    lexer = KDLLexer(source)
+    raw_tokens = lexer.tokenize_raw()
+
+    token_types = [t.typ for t in raw_tokens]
+    assert token_types == [
+        TokenType.IDENT,  # node
+        TokenType.LPAREN,  # (
+        TokenType.IDENT,  # my-type
+        TokenType.RPAREN,  # )
+        TokenType.IDENT,  # foo
+        TokenType.IDENT,  # key
+        TokenType.EQUAL,  # =
+        TokenType.STRING,  # "str"
+        TokenType.NUMBER,  # 0x1A
+        TokenType.NUMBER,  # 0o77
+        TokenType.NUMBER,  # 0b101
+        TokenType.NUMBER,  # 42
+        TokenType.NUMBER,  # 3.14
+        TokenType.NUMBER,  # -10
+        TokenType.BOOL,  # #false
+        TokenType.NULL,  # #null
+        TokenType.SLASHDASH,  # /-
+        TokenType.IDENT,  # bar
+        TokenType.SEMI,  # ;
+        TokenType.NEWLINE,  # \n
+        TokenType.EOF,
+    ]
+
+
+def test_multihash_raw_and_multiline_strings() -> None:
+    # Multi-hash raw strings
+    doc1 = KDL2CSTParser().parse('node #"single raw"# ##"double raw"## ###"triple raw"###')
+    values1 = [e.value.value for e in doc1.nodes[0].entries]
+    assert values1 == ["single raw", "double raw", "triple raw"]
+
+    # Multiline raw strings
+    doc2 = KDL2CSTParser().parse('node #"""\n  multiline raw\n  """# ##"""\n  double ml\n  """##')
+    values2 = [e.value.value for e in doc2.nodes[0].entries]
+    assert values2 == ["multiline raw", "double ml"]
+
+    # Multiline raw string missing leading newline raises error
+    with pytest.raises(KDLParseError) as exc:
+        KDL2CSTParser().parse('node #"""no newline"""#')
+    assert exc.value.code == "multiline-raw-string/no-leading-newline"
+
+    # Unterminated raw string
+    with pytest.raises(KDLParseError) as exc2:
+        KDL2CSTParser().parse('node ##"unterminated"#')
+    assert exc2.value.code == "raw-string/unterminated"
+
+
+def test_nested_block_comments_depth_tracking() -> None:
+    # Deeply nested block comments
+    doc = KDL2CSTParser().parse("node /* outer /* mid /* inner */ mid2 */ outer2 */ 42")
+    assert len(doc.nodes) == 1
+    assert len(doc.nodes[0].entries) == 1
+    assert doc.nodes[0].entries[0].value.value == 42
+
+    # Unterminated nested block comment
+    with pytest.raises(KDLParseError) as exc:
+        KDL2CSTParser().parse("node /* outer /* inner */ missing_close 42")
+    assert exc.value.code == "block-comment/unterminated"
+
+
+def test_vectorized_escape_decoding() -> None:
+    from kdlquery.parser import _decode_escape_body
+
+    # Plain fast path
+    assert _decode_escape_body("plain text") == "plain text"
+
+    # All standard escapes
+    assert _decode_escape_body(r"line\nbreak\r\ttab\b\f\\\"space\s") == "line\nbreak\r\ttab\b\f\\\"space "
+
+    # Unicode scalar escapes
+    assert _decode_escape_body(r"\u{41}\u{1F600}") == "A\U0001F600"
+
+    # Whitespace escapes
+    assert _decode_escape_body("hello\\\n    world") == "helloworld"
+
+    # Invalid escapes
+    with pytest.raises(ValueError, match="Surrogate code point"):
+        _decode_escape_body(r"\u{D800}")
+    with pytest.raises(ValueError, match="exceeds maximum"):
+        _decode_escape_body(r"\u{110000}")
+    with pytest.raises(ValueError, match="Unterminated"):
+        _decode_escape_body(r"\u{123")
+    with pytest.raises(ValueError, match="Invalid escape sequence"):
+        _decode_escape_body(r"\x")
+
