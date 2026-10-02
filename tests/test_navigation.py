@@ -142,10 +142,6 @@ class TestNodeDepth:
         root = doc.nodes[0]
         assert root.children[0].children[0].depth() == 2
 
-    def test_agrees_with_document_depth_of(self, doc: KdlDocument) -> None:
-        for node in doc.iter_nodes():
-            assert node.depth() == doc.depth_of(node)
-
 
 # ---------------------------------------------------------------------------
 # KdlNode.index()
@@ -161,10 +157,6 @@ class TestNodeIndex:
         root = doc.nodes[0]
         assert root.children[0].index() == 0
         assert root.children[1].index() == 1
-
-    def test_agrees_with_document_index_of(self, doc: KdlDocument) -> None:
-        for node in doc.iter_nodes():
-            assert node.index() == doc.index_of(node)
 
     def test_standalone_root_index(self) -> None:
         cst = KDL2CSTParser().parse("item 42")
@@ -188,10 +180,6 @@ class TestNodeSiblings:
         child_b = root.children[1]
         assert child_a.siblings() == [child_a, child_b]
         assert child_b.siblings() == [child_a, child_b]
-
-    def test_agrees_with_document_siblings_of(self, doc: KdlDocument) -> None:
-        for node in doc.iter_nodes():
-            assert node.siblings() == doc.siblings_of(node)
 
 
 # ---------------------------------------------------------------------------

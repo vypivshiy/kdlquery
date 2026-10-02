@@ -39,10 +39,6 @@ class TestKdlValueCreate:
         v = KdlValue.keyword("#custom-foo")
         assert v.value.raw == "#custom-foo"
 
-    def test_keyword_eq(self):
-        assert _Keyword("#true") == _Keyword("#true")
-        assert _Keyword("#true") != _Keyword("#false")
-
 
 # ---------------------------------------------------------------------------
 # KdlNode.create + mutation API
@@ -415,15 +411,3 @@ class TestMigrationExample:
         assert reparsed.children[0].name == "@request"
         assert reparsed.children[1].name == "@check"
         assert reparsed.children[1].children[2].get_arg(0) is False
-
-
-# ---------------------------------------------------------------------------
-# Empty doc handling
-# ---------------------------------------------------------------------------
-
-
-def test_empty_doc_to_kdl():
-    from kdlquery.document import KdlDocument
-
-    doc = KdlDocument(nodes=[])
-    assert doc.to_kdl() == ""

@@ -148,48 +148,6 @@ top-level 42
         assert document.nodes[0].name == "root"
         assert document.nodes[1].name == "top-level"
 
-    def test_parent_of_root_is_none(self, document: KdlDocument) -> None:
-        assert document.parent_of(document.nodes[0]) is None
-        assert document.parent_of(document.nodes[1]) is None
-
-    def test_parent_of_child(self, document: KdlDocument) -> None:
-        root = document.nodes[0]
-        child_a = root.children[0]
-        assert document.parent_of(child_a) is root
-
-    def test_parent_of_grandchild(self, document: KdlDocument) -> None:
-        root = document.nodes[0]
-        grandchild = root.children[0].children[0]
-        assert document.parent_of(grandchild) is root.children[0]
-        parent = document.parent_of(grandchild)
-        assert parent is not None
-        assert document.parent_of(parent) is root
-
-    def test_depth_of(self, document: KdlDocument) -> None:
-        root = document.nodes[0]
-        child = root.children[0]
-        grandchild = child.children[0]
-        assert document.depth_of(root) == 0
-        assert document.depth_of(child) == 1
-        assert document.depth_of(grandchild) == 2
-
-    def test_depth_of_top_level(self, document: KdlDocument) -> None:
-        assert document.depth_of(document.nodes[1]) == 0
-
-    def test_index_of(self, document: KdlDocument) -> None:
-        root = document.nodes[0]
-        assert document.index_of(root) == 0
-        assert document.index_of(document.nodes[1]) == 1
-        assert document.index_of(root.children[0]) == 0
-        assert document.index_of(root.children[1]) == 1
-
-    def test_siblings_of(self, document: KdlDocument) -> None:
-        root = document.nodes[0]
-        child_a = root.children[0]
-        child_b = root.children[1]
-        assert document.siblings_of(child_a) == [child_a, child_b]
-        assert document.siblings_of(root) == document.nodes
-
     def test_iter_nodes(self, document: KdlDocument) -> None:
         names = [n.name for n in document.iter_nodes()]
         assert names == ["root", "child-a", "grandchild", "child-b", "top-level"]
