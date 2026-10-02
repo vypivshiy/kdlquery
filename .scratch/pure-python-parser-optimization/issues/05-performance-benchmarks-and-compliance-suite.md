@@ -5,10 +5,10 @@ Add an automated performance benchmark test verifying linear O(N) scaling on lar
 
 **Blocked by:** 04-tree-builder-and-direct-ast-construction
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Automated benchmark test in `tests/test_benchmark.py` verifies linear O(N) scaling on 50KB–2MB inputs.
-- [ ] Parsing throughput reaches >5 MB/sec pure Python.
-- [ ] All 403 KDL 2.0 compliance test cases pass with exact error codes and coordinates.
-- [ ] All existing test suites pass: `test_kdl_parser.py`, `test_navigation.py`, `test_reader.py`, `test_selector.py`, `test_write.py`.
-- [ ] `uv run mypy kdlquery` and `uv run ruff check .` pass cleanly.
+- [x] Automated benchmark test in `tests/test_benchmark.py` verifies linear O(N) scaling on 50KB–2MB inputs.
+- [x] Parsing throughput reaches >5 MB/sec pure Python.
+- [x] All 403 KDL 2.0 compliance test cases pass with exact error codes and coordinates.
+- [x] All existing test suites pass: `test_kdl_parser.py`, `test_navigation.py`, `test_reader.py`, `test_selector.py`, `test_write.py`.
+- [x] `uv run mypy kdlquery` and `uv run ruff check .` pass cleanly.
