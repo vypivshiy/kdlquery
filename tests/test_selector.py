@@ -1,7 +1,7 @@
 import pytest
 
-from kdlquery import KdlDocument, KdlNode, parse
-
+from kdlquery import KdlDocument, KdlNode, SelectorError, parse
+from kdlquery.selector import SelectorLexer
 
 KDL_TEST_DOC = """\
 /- kdl-version 2
@@ -811,3 +811,307 @@ class TestKdlNodeSelect:
         assert _first_args(r) == ["localhost", "127.0.0.1"]
         # Should not find hosts from other server
         assert "replica.local" not in _first_args(r)
+
+
+# ---------------------------------------------------------------------------
+# Backslash-escaped identifiers (Ticket 02)
+# ---------------------------------------------------------------------------
+
+KDL_ESCAPED_DOC = r"""/- kdl-version 2
+
+"a>b" 10 key="val1" {
+    "c+d" 20 {
+        "nested:item" 21
+    }
+    "e~f" 30
+    "g,h" 40
+}
+
+">foo" 50
+"+bar" 60
+"~baz" 70
+",qux" 80
+"ns:service" 90 active=#true {
+    "leaf" 91
+}
+"complex>a+b~c,d:e" 100
+"has\\backslash" 110
+"has\"quote" 120
+"end>" 130
+"hello world" 140
+"""
+
+
+@pytest.fixture()
+def escaped_doc() -> KdlDocument:
+    return parse(KDL_ESCAPED_DOC)
+
+
+class TestEscapedIdentifiersBasic:
+    def test_escaped_gt(self, escaped_doc: KdlDocument) -> None:
+        r = escaped_doc.select(r"a\>b")
+        assert _names(r) == ["a>b"]
+        assert _first_args(r) == [10]
+
+    def test_escaped_gt_at_start(self, escaped_doc: KdlDocument) -> None:
+        r = escaped_doc.select(r"\>foo")
+        assert _names(r) == [">foo"]
+        assert _first_args(r) == [50]
+
+    def test_escaped_gt_at_end(self, escaped_doc: KdlDocument) -> None:
+        r = escaped_doc.select(r"end\>")
+        assert _names(r) == ["end>"]
+        assert _first_args(r) == [130]
+
+    def test_escaped_plus(self, escaped_doc: KdlDocument) -> None:
+        r = escaped_doc.select(r"c\+d")
+        assert _names(r) == ["c+d"]
+        assert _first_args(r) == [20]
+
+    def test_escaped_plus_at_start(self, escaped_doc: KdlDocument) -> None:
+        r = escaped_doc.select(r"\+bar")
+        assert _names(r) == ["+bar"]
+        assert _first_args(r) == [60]
+
+    def test_escaped_tilde(self, escaped_doc: KdlDocument) -> None:
+        r = escaped_doc.select(r"e\~f")
+        assert _names(r) == ["e~f"]
+        assert _first_args(r) == [30]
+
+    def test_escaped_tilde_at_start(self, escaped_doc: KdlDocument) -> None:
+        r = escaped_doc.select(r"\~baz")
+        assert _names(r) == ["~baz"]
+        assert _first_args(r) == [70]
+
+    def test_escaped_comma(self, escaped_doc: KdlDocument) -> None:
+        r = escaped_doc.select(r"g\,h")
+        assert _names(r) == ["g,h"]
+        assert _first_args(r) == [40]
+
+    def test_escaped_comma_at_start(self, escaped_doc: KdlDocument) -> None:
+        r = escaped_doc.select(r"\,qux")
+        assert _names(r) == [",qux"]
+        assert _first_args(r) == [80]
+
+    def test_escaped_colon(self, escaped_doc: KdlDocument) -> None:
+        r = escaped_doc.select(r"ns\:service")
+        assert _names(r) == ["ns:service"]
+        assert _first_args(r) == [90]
+
+    def test_escaped_multiple_in_one_ident(self, escaped_doc: KdlDocument) -> None:
+        r = escaped_doc.select(r"complex\>a\+b\~c\,d\:e")
+        assert _names(r) == ["complex>a+b~c,d:e"]
+        assert _first_args(r) == [100]
+
+    def test_escaped_backslash(self, escaped_doc: KdlDocument) -> None:
+        r = escaped_doc.select(r"has\\backslash")
+        assert _names(r) == [r"has\backslash"]
+        assert _first_args(r) == [110]
+
+    def test_escaped_quote(self, escaped_doc: KdlDocument) -> None:
+        r = escaped_doc.select(r"has\"quote")
+        assert _names(r) == ['has"quote']
+        assert _first_args(r) == [120]
+
+    def test_escaped_space(self, escaped_doc: KdlDocument) -> None:
+        r = escaped_doc.select(r"hello\ world")
+        assert _names(r) == ["hello world"]
+        assert _first_args(r) == [140]
+
+    def test_escaped_with_attribute_filter(self, escaped_doc: KdlDocument) -> None:
+        r = escaped_doc.select(r'a\>b[key="val1"]')
+        assert _names(r) == ["a>b"]
+        r2 = escaped_doc.select(r"a\>b[0=10]")
+        assert _names(r2) == ["a>b"]
+
+    def test_unterminated_escape_at_eof(self, escaped_doc: KdlDocument) -> None:
+        with pytest.raises(SelectorError, match="Unterminated escape sequence"):
+            escaped_doc.select("foo\\")
+
+    def test_unterminated_escape_single_backslash(
+        self, escaped_doc: KdlDocument
+    ) -> None:
+        with pytest.raises(SelectorError, match="Unterminated escape sequence"):
+            escaped_doc.select("\\")
+
+
+class TestEscapedIdentifiersCombinators:
+    def test_child_combinator(self, escaped_doc: KdlDocument) -> None:
+        r = escaped_doc.select(r"a\>b > c\+d")
+        assert _names(r) == ["c+d"]
+        assert _first_args(r) == [20]
+
+    def test_child_combinator_without_whitespace(
+        self, escaped_doc: KdlDocument
+    ) -> None:
+        r = escaped_doc.select(r"a\>b>c\+d")
+        assert _names(r) == ["c+d"]
+        assert _first_args(r) == [20]
+
+    def test_nested_child_combinators(self, escaped_doc: KdlDocument) -> None:
+        r = escaped_doc.select(r"a\>b > c\+d > nested\:item")
+        assert _names(r) == ["nested:item"]
+        assert _first_args(r) == [21]
+
+    def test_descendant_combinator(self, escaped_doc: KdlDocument) -> None:
+        r = escaped_doc.select(r"a\>b nested\:item")
+        assert _names(r) == ["nested:item"]
+        assert _first_args(r) == [21]
+
+    def test_adjacent_sibling(self, escaped_doc: KdlDocument) -> None:
+        r = escaped_doc.select(r"c\+d + e\~f")
+        assert _names(r) == ["e~f"]
+        assert _first_args(r) == [30]
+
+    def test_adjacent_sibling_without_whitespace(
+        self, escaped_doc: KdlDocument
+    ) -> None:
+        r = escaped_doc.select(r"c\+d+e\~f")
+        assert _names(r) == ["e~f"]
+        assert _first_args(r) == [30]
+
+    def test_general_sibling(self, escaped_doc: KdlDocument) -> None:
+        r = escaped_doc.select(r"c\+d ~ g\,h")
+        assert _names(r) == ["g,h"]
+        assert _first_args(r) == [40]
+
+    def test_general_sibling_without_whitespace(self, escaped_doc: KdlDocument) -> None:
+        r = escaped_doc.select(r"c\+d~g\,h")
+        assert _names(r) == ["g,h"]
+        assert _first_args(r) == [40]
+
+    def test_chained_child_and_general_sibling(self, escaped_doc: KdlDocument) -> None:
+        r = escaped_doc.select(r"a\>b > c\+d ~ g\,h")
+        assert _names(r) == ["g,h"]
+
+
+class TestEscapedIdentifiersPseudoClasses:
+    def test_not_with_escaped_node(self, escaped_doc: KdlDocument) -> None:
+        r = escaped_doc.select(r"a\>b > *:not(c\+d)")
+        assert _names(r) == ["e~f", "g,h"]
+
+    def test_not_with_multiple_escaped_nodes(self, escaped_doc: KdlDocument) -> None:
+        r = escaped_doc.select(r"a\>b > *:not(c\+d, e\~f)")
+        assert _names(r) == ["g,h"]
+
+    def test_escaped_node_with_not(self, escaped_doc: KdlDocument) -> None:
+        r = escaped_doc.select(r"a\>b:not(:empty)")
+        assert _names(r) == ["a>b"]
+
+    def test_has_descendant(self, escaped_doc: KdlDocument) -> None:
+        r = escaped_doc.select(r"a\>b:has(nested\:item)")
+        assert _names(r) == ["a>b"]
+
+    def test_has_child(self, escaped_doc: KdlDocument) -> None:
+        r = escaped_doc.select(r"a\>b:has(> c\+d)")
+        assert _names(r) == ["a>b"]
+
+    def test_has_nested_child(self, escaped_doc: KdlDocument) -> None:
+        r = escaped_doc.select(r"c\+d:has(> nested\:item)")
+        assert _names(r) == ["c+d"]
+        r2 = escaped_doc.select(r"a\>b:has(> e\~f)")
+        assert _names(r2) == ["a>b"]
+
+    def test_first_child(self, escaped_doc: KdlDocument) -> None:
+        r = escaped_doc.select(r"c\+d:first-child")
+        assert _names(r) == ["c+d"]
+
+    def test_last_child(self, escaped_doc: KdlDocument) -> None:
+        r = escaped_doc.select(r"g\,h:last-child")
+        assert _names(r) == ["g,h"]
+
+
+class TestEscapedIdentifiersCommaList:
+    def test_comma_union_of_escaped_nodes(self, escaped_doc: KdlDocument) -> None:
+        r = escaped_doc.select(r"a\>b, \>foo, \+bar")
+        assert _names(r) == ["a>b", ">foo", "+bar"]
+
+    def test_escaped_comma_within_node_in_comma_union(
+        self, escaped_doc: KdlDocument
+    ) -> None:
+        r = escaped_doc.select(r"g\,h, a\>b")
+        assert _names(r) == ["a>b", "g,h"]
+
+
+class TestEscapedIdentifiersSelectOne:
+    def test_select_one_found(self, escaped_doc: KdlDocument) -> None:
+        node = escaped_doc.select_one(r"a\>b > c\+d")
+        assert node is not None
+        assert node.name == "c+d"
+        assert node.get_arg(0) == 20
+
+    def test_select_one_none(self, escaped_doc: KdlDocument) -> None:
+        node = escaped_doc.select_one(r"non\>existent")
+        assert node is None
+
+
+class TestEscapedIdentifiersKdlNodeMethods:
+    def test_kdl_node_matches(self, escaped_doc: KdlDocument) -> None:
+        node = escaped_doc.select_one(r"a\>b")
+        assert node is not None
+        assert node.matches(r"a\>b") is True
+        assert node.matches(r"c\+d") is False
+        assert node.matches(r":has(c\+d)") is True
+        assert node.matches(r":has(> c\+d)") is True
+        assert node.matches(r":not(a\>b)") is False
+        assert node.matches(r":not(c\+d)") is True
+
+    def test_kdl_node_matches_start_escaped(self, escaped_doc: KdlDocument) -> None:
+        node = escaped_doc.select_one(r"\>foo")
+        assert node is not None
+        assert node.matches(r"\>foo") is True
+        assert node.matches(r"\+bar") is False
+
+    def test_kdl_node_select(self, escaped_doc: KdlDocument) -> None:
+        node = escaped_doc.select_one(r"a\>b")
+        assert node is not None
+        r = node.select(r"c\+d")
+        assert _names(r) == ["c+d"]
+        r2 = node.select(r"c\+d > nested\:item")
+        assert _names(r2) == ["nested:item"]
+
+    def test_kdl_node_select_one(self, escaped_doc: KdlDocument) -> None:
+        node = escaped_doc.select_one(r"a\>b")
+        assert node is not None
+        item = node.select_one(r"nested\:item")
+        assert item is not None
+        assert item.name == "nested:item"
+        assert item.get_arg(0) == 21
+        assert node.select_one(r"non\>existent") is None
+
+
+class TestSelectorLexerEscaping:
+    def test_raw_vs_value_unescaping(self) -> None:
+        toks = SelectorLexer(r"a\>b").tokenize()
+        assert toks[0].raw == r"a\>b"
+        assert toks[0].value == "a>b"
+
+    def test_start_escape_raw_vs_value(self) -> None:
+        toks = SelectorLexer(r"\>foo").tokenize()
+        assert toks[0].raw == r"\>foo"
+        assert toks[0].value == ">foo"
+
+    def test_combinator_tokens(self) -> None:
+        toks = SelectorLexer(r"a\>b > c\+d").tokenize()
+        assert [(t.typ.value, t.raw, t.value) for t in toks] == [
+            ("IDENT", r"a\>b", "a>b"),
+            ("GT", ">", None),
+            ("IDENT", r"c\+d", "c+d"),
+            ("EOF", "", None),
+        ]
+
+    def test_various_escaped_characters(self) -> None:
+        for raw_ident, expected_val in [
+            (r"a\+b", "a+b"),
+            (r"a\~b", "a~b"),
+            (r"a\,b", "a,b"),
+            (r"a\:b", "a:b"),
+            (r"a\#b", "a#b"),
+            (r"a\*b", "a*b"),
+            (r"a\=b", "a=b"),
+            (r"a\(b\)", "a(b)"),
+            (r"a\[b\]", "a[b]"),
+        ]:
+            toks = SelectorLexer(raw_ident).tokenize()
+            assert toks[0].raw == raw_ident
+            assert toks[0].value == expected_val

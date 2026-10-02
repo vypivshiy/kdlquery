@@ -5,10 +5,10 @@ Support CSS-style backslash escaping within unquoted identifiers for node names 
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Backslash-escaped special characters in unquoted identifiers (`\>`, `\+`, `\,`, `\:`, `\~`, etc.) are recognized as part of the identifier.
-- [ ] The lexer automatically unescapes the escape sequences so `raw="a\\>b"` produces `value="a>b"`.
-- [ ] Queries using backslash-escaped identifiers match nodes with special characters via `select()`, `select_one()`, and `matches()`.
-- [ ] Escaped identifiers can be chained with combinators (e.g. `a\>b > c\+d`).
-- [ ] Escaped identifiers work inside `:not(...)` and `:has(...)`.
+- [x] Backslash-escaped special characters in unquoted identifiers (`\>`, `\+`, `\,`, `\:`, `\~`, etc.) are recognized as part of the identifier.
+- [x] The lexer automatically unescapes the escape sequences so `raw="a\\>b"` produces `value="a>b"`.
+- [x] Queries using backslash-escaped identifiers match nodes with special characters via `select()`, `select_one()`, and `matches()`.
+- [x] Escaped identifiers can be chained with combinators (e.g. `a\>b > c\+d`).
+- [x] Escaped identifiers work inside `:not(...)` and `:has(...)`.
