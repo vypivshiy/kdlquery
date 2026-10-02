@@ -108,28 +108,35 @@ tests/
 
 ```
 # Node
-name                    by name
+name                    by bare identifier
+"name" or 'name'        quoted node name (handles >, +, ~, ,, :, spaces)
+\>name or a\>b          backslash-escaped identifier (CSS-style)
 *                       any node
 (type)                  by type annotation
+("type") or (t\:ype)    quoted or escaped type annotation
 (type)name              type annotation + name
 
 # Property filters
 [key]                   exists
+["key"] or ['key']      quoted property key (handles ., :, >, spaces)
+[key\.name]             backslash-escaped property key
+["0"]                   property with string key "0" (distinguished from arg 0)
 [key=val]               equals
 [key^=val]              starts with
 [key$=val]              ends with
 [key~=val]              contains
 [(type)key]             property with type-annotated value
-[(type)key=val]         type-annotated + value match
+[("type")key=val]       type-annotated (quoted/escaped type) + value match
 
 # Argument filters
-[N]                     argument at position N exists
-[N=val]                 equals
+[N]                     positional argument at index N exists (unquoted integer)
+[N=val]                 positional argument at index N equals val
 [N^=val]                starts with
 [N$=val]                ends with
 [N~=val]                contains
-[(type)N]               argument with type annotation
-[*=val]                 any argument equals val
+[(type)N]               positional argument with type annotation
+[("type")N=val]         positional argument with quoted/escaped type annotation
+[*=val]                 any positional argument equals val
 
 # Combinators
 A B                     descendant
@@ -147,9 +154,9 @@ A, B                    union (deduplicated)
 :nth-child(2n+1)
 :only-child
 :empty
-:not(compound)
-:has(complex)
-:has(> complex)
+:not(selector)
+:has(selector)
+:has(> selector)
 ```
 
 ## Reader pattern

@@ -2,7 +2,7 @@
 
 A pure Python [KDL 2.0](https://kdl.dev/spec) parser with a CSS3-like selector API.
 
-kdlquery provides a lossless CST parser, a mutable node tree with parent/sibling navigation, a Reader API for transforming KDL documents into arbitrary Python objects, a selector engine for querying nodes by name, type annotation, properties, arguments, combinators, and pseudo-classes, and a spec-compliant serializer for emitting KDL 2.0 text from any node tree (parsed or built from scratch).
+kdlquery provides a lossless CST parser and a mutable node tree with parent/sibling navigation. It includes a CSS3-like selector engine for querying nodes, a Reader API for transforming documents into Python objects with source-span diagnostics, and a spec-compliant serializer for emitting KDL 2.0 text from any tree.
 
 Designed as a foundation for building DSLs — KDL is a good fit for configuration, schemas, and structured data. The parser and selector API together cover the common cases of parsing, validating, and linting KDL documents.
 
@@ -75,7 +75,11 @@ app.get_arg(0)                    # "my-service"
 app.get_prop("version")           # "1.0.0"
 
 # Children
-for server in app.children:
+for child in app.children:
+    print(child.name, child.get_arg(0))
+
+# Or query specific children directly
+for server in app.select("server"):
     print(server.get_arg(0), server.get_prop("port"))
 
 # Tree navigation via KdlDocument (backward-compatible)
@@ -110,10 +114,11 @@ doc.select("server[tls=#true]")
 doc.select('route[handler^="users"]')
 # → [route "GET" "/api/users", route "POST" "/api/users"]
 
-# Argument filters
+# Argument filters (select first arg)
 doc.select('route[0="GET"]')
 # → [route "GET" "/api/users", route "GET" "/api/health", route "GET" "/static/*"]
 
+# select all args
 doc.select('route[*="POST"]')
 # → [route "POST" "/api/users"]
 
@@ -213,6 +218,45 @@ app.select("*:root")
 # → []
 ```
 
+### Selector identifier disambiguation
+
+KDL 2.0 identifiers allow characters that CSS3 selectors treat as combinators or syntax tokens (`>`, `<`, `+`, `,`, `:`, `~`, `.`, whitespace). To query nodes, properties, or type annotations containing these characters, use double quotes (`"..."`), single quotes (`'...'`), or backslash escaping (`\`):
+
+```python
+# Quoted node names (avoids combinator and separator collisions)
+doc.select('"a>b"')
+doc.select('"service:web"')
+doc.select("'c+d'")
+
+# Backslash-escaped identifiers (CSS-style)
+doc.select(r"a\>b")
+doc.select(r"ns\:service")
+doc.select(r"hello\ world")
+
+# Quoted or escaped type annotations
+doc.select('("my/custom:type")service')
+doc.select(r"(my\/custom\:type)service")
+doc.select('service[("u:16")port=8080]')
+doc.select('app[("u:16")1=100]')
+
+# Quoted or escaped property keys (supports dots, colons, brackets, spaces)
+doc.select('service["app.name"="api-gateway"]')
+doc.select(r'service[app\.name="api-gateway"]')
+doc.select('service["foo:bar"="baz"]')
+doc.select('service["a>b"="gt_val"]')
+
+# Positional arguments vs numeric property keys
+doc.select('route[0="GET"]')       # unquoted integer: positional argument at index 0
+doc.select('route["0"="GET"]')     # quoted string: property with string key "0"
+doc.select("worker[0]")            # positional argument at index 0 exists
+doc.select('worker["0"]')          # property with string key "0" exists
+
+# Combinators and pseudo-classes with disambiguated selectors
+doc.select('"parent>node" > "child+node"')
+doc.select('"service:web":not("service:api")')
+doc.select('service:has(> route["api.version"="v2"])')
+```
+
 ### Navigation API
 
 DOM-like methods for traversing the node tree. Inspired by `Element.closest()`, `Element.matches()`, and `Node.parentElement` from the browser DOM.
@@ -261,7 +305,7 @@ host.closest("nonexistent")           # None
 
 ### Reader API
 
-The Reader API lets you transform a KDL document into arbitrary Python objects by walking the node tree.
+The Reader API transforms a KDL document into domain objects while collecting source-span diagnostics. While `parse()` constructs a queryable `KdlDocument` directly, `parse_into()` walks a `CSTDocument` from `KDL2CSTParser` to preserve exact source positions for validation errors.
 
 ```python
 from kdlquery import KDL2CSTParser, DictReader, parse_into
@@ -428,28 +472,35 @@ except KDLParseError as e:
 
 ```
 # Node
-name                    # by name
+name                    # by bare identifier
+"name" or 'name'        # quoted node name (handles >, +, ~, ,, :, spaces)
+\>name or a\>b          # backslash-escaped identifier (CSS-style)
 *                       # any node
 (type)                  # by type annotation on node
+("type") or (t\:ype)    # quoted or escaped type annotation
 (type)name              # type annotation + name
 
 # Properties
 [key]                   # property exists
+["key"] or ['key']      # quoted property key (handles ., :, >, spaces)
+[key\.name]             # backslash-escaped property key
+["0"]                   # property with string key "0" (distinguished from arg 0)
 [key=val]               # equals
 [key^=val]              # starts with
 [key$=val]              # ends with
 [key~=val]              # contains
 [(type)key]             # property with type-annotated value
-[(type)key=val]         # type-annotated + value match
+[("type")key=val]       # type-annotated (quoted/escaped type) + value match
 
 # Arguments
-[N]                     # argument at position N exists
-[N=val]                 # equals
+[N]                     # positional argument at index N exists (unquoted integer)
+[N=val]                 # positional argument at index N equals val
 [N^=val]                # starts with
 [N$=val]                # ends with
 [N~=val]                # contains
-[(type)N]               # argument with type annotation
-[*=val]                 # any argument equals val
+[(type)N]               # positional argument with type annotation
+[("type")N=val]         # positional argument with quoted/escaped type annotation
+[*=val]                 # any positional argument equals val
 
 # Combinators
 A B                     # descendant
@@ -467,9 +518,9 @@ A, B                    # union (deduplicated)
 :nth-child(2n+1)
 :only-child
 :empty
-:not(compound)
-:has(complex)
-:has(> complex)
+:not(selector)
+:has(selector)
+:has(> selector)
 ```
 
 ## License
