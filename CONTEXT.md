@@ -15,3 +15,11 @@ _Avoid_: Multiline comment break, dangling comment
 **Node Space**:
 Whitespace, block comments, or esclines that separate arguments and properties within a node.
 _Avoid_: Entry separator, node whitespace
+
+**CSS3 Node Selector**:
+The query selector dialect used by `kdlquery` to traverse and filter KDL nodes, based on CSS3 syntax rather than the unfinalized official KQL draft.
+_Avoid_: KQL selector, KDL query path
+
+**Selector Identifier Disambiguation**:
+The syntax convention allowing node names, property keys, or type annotations with KDL 2.0 special characters (`>`, `<`, `+`, `,`) to be wrapped in quotes (`"..."`, `'...'`) or backslash-escaped (`\>`).
+_Avoid_: Operator escaping, quoted selector
