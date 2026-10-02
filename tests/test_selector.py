@@ -1442,3 +1442,319 @@ class TestSelectorLexerEscaping:
             toks = SelectorLexer(raw_ident).tokenize()
             assert toks[0].raw == raw_ident
             assert toks[0].value == expected_val
+
+
+# ---------------------------------------------------------------------------
+# Disambiguated property filter keys and positional argument differentiation (Ticket 04)
+# ---------------------------------------------------------------------------
+
+KDL_ATTR_KEYS_DOC = r"""/- kdl-version 2
+
+service "my-app" "backend" "0"="prop_zero" "1"="prop_one" "app.name"="api-gateway" "foo:bar"="baz" "a>b"="gt_val" "c+d"="plus_val" "x~y"="tilde_val" "a,b"="comma_val" "nested[key]"="bracket_val" "spaced key"="space_val" "has'single"="single_quote_val" "has\"double"="double_quote_val" port=(u16)8080 {
+    route "/users" "GET" "api.version"="v1" auth=#true "0"="route_zero"
+    route "/items" "POST" "api.version"="v2" auth=#false "0"="item_zero"
+    config "db.host"="localhost" "foo.bar"="cfg_val"
+}
+
+service "secondary" "frontend" "0"="sec_zero" "app.name"="web-client" "foo:bar"="qux" {
+    route "/dashboard" "GET" "api.version"="v1" auth=#true
+}
+
+worker "worker-1" "active" 100 "0"="w0" "1"="w1" "2"="w2"
+"""
+
+
+@pytest.fixture()
+def attr_doc() -> KdlDocument:
+    return parse(KDL_ATTR_KEYS_DOC)
+
+
+class TestDisambiguatedAttributeKeysQuotes:
+    def test_double_quoted_property_keys(self, attr_doc: KdlDocument) -> None:
+        r = attr_doc.select('service["app.name"="api-gateway"]')
+        assert _first_args(r) == ["my-app"]
+        r2 = attr_doc.select('service["app.name"="web-client"]')
+        assert _first_args(r2) == ["secondary"]
+
+    def test_single_quoted_property_keys(self, attr_doc: KdlDocument) -> None:
+        r = attr_doc.select("service['app.name'='api-gateway']")
+        assert _first_args(r) == ["my-app"]
+        r2 = attr_doc.select("service['app.name'='web-client']")
+        assert _first_args(r2) == ["secondary"]
+
+    def test_single_quoted_key_with_double_quoted_value(self, attr_doc: KdlDocument) -> None:
+        r = attr_doc.select('service[\'app.name\'="api-gateway"]')
+        assert _first_args(r) == ["my-app"]
+
+    def test_double_quoted_key_with_single_quoted_value(self, attr_doc: KdlDocument) -> None:
+        r = attr_doc.select("service[\"app.name\"='api-gateway']")
+        assert _first_args(r) == ["my-app"]
+
+    def test_special_characters_in_quoted_keys(self, attr_doc: KdlDocument) -> None:
+        assert _first_args(attr_doc.select('service["foo:bar"="baz"]')) == ["my-app"]
+        assert _first_args(attr_doc.select("service['foo:bar'='baz']")) == ["my-app"]
+        assert _first_args(attr_doc.select('service["foo:bar"="qux"]')) == ["secondary"]
+
+        assert _first_args(attr_doc.select('service["a>b"="gt_val"]')) == ["my-app"]
+        assert _first_args(attr_doc.select("service['a>b'='gt_val']")) == ["my-app"]
+
+        assert _first_args(attr_doc.select('service["c+d"="plus_val"]')) == ["my-app"]
+        assert _first_args(attr_doc.select("service['c+d'='plus_val']")) == ["my-app"]
+
+        assert _first_args(attr_doc.select('service["x~y"="tilde_val"]')) == ["my-app"]
+        assert _first_args(attr_doc.select("service['x~y'='tilde_val']")) == ["my-app"]
+
+        assert _first_args(attr_doc.select('service["a,b"="comma_val"]')) == ["my-app"]
+        assert _first_args(attr_doc.select("service['a,b'='comma_val']")) == ["my-app"]
+
+        assert _first_args(attr_doc.select('service["nested[key]"="bracket_val"]')) == ["my-app"]
+        assert _first_args(attr_doc.select("service['nested[key]'='bracket_val']")) == ["my-app"]
+
+        assert _first_args(attr_doc.select('service["spaced key"="space_val"]')) == ["my-app"]
+        assert _first_args(attr_doc.select("service['spaced key'='space_val']")) == ["my-app"]
+
+        assert _first_args(attr_doc.select('service["has\'single"="single_quote_val"]')) == ["my-app"]
+        assert _first_args(attr_doc.select("service['has\"double'='double_quote_val']")) == ["my-app"]
+
+    def test_quoted_key_operators(self, attr_doc: KdlDocument) -> None:
+        assert _first_args(attr_doc.select('service["app.name"^="api"]')) == ["my-app"]
+        assert _first_args(attr_doc.select('service["app.name"$="client"]')) == ["secondary"]
+        assert _first_args(attr_doc.select('service["app.name"~="gate"]')) == ["my-app"]
+
+    def test_quoted_key_existence_filter(self, attr_doc: KdlDocument) -> None:
+        assert _first_args(attr_doc.select('service["app.name"]')) == ["my-app", "secondary"]
+        assert _first_args(attr_doc.select("service['foo:bar']")) == ["my-app", "secondary"]
+        assert _first_args(attr_doc.select('service["a>b"]')) == ["my-app"]
+        assert _first_args(attr_doc.select('service["nonexistent"]')) == []
+
+    def test_type_annotated_value_with_quoted_key(self, attr_doc: KdlDocument) -> None:
+        assert _first_args(attr_doc.select('service[(u16)"port"=8080]')) == ["my-app"]
+        assert _first_args(attr_doc.select('service[(u32)"port"=8080]')) == []
+
+
+class TestDisambiguatedAttributeKeysEscapes:
+    def test_unquoted_key_with_escaped_dot(self, attr_doc: KdlDocument) -> None:
+        r = attr_doc.select(r'service[app\.name="api-gateway"]')
+        assert _first_args(r) == ["my-app"]
+        r2 = attr_doc.select(r'service[app\.name="web-client"]')
+        assert _first_args(r2) == ["secondary"]
+
+    def test_unquoted_key_with_escaped_colon(self, attr_doc: KdlDocument) -> None:
+        assert _first_args(attr_doc.select(r'service[foo\:bar="baz"]')) == ["my-app"]
+        assert _first_args(attr_doc.select(r'service[foo\:bar="qux"]')) == ["secondary"]
+
+    def test_unquoted_key_with_escaped_combinators(self, attr_doc: KdlDocument) -> None:
+        assert _first_args(attr_doc.select(r'service[a\>b="gt_val"]')) == ["my-app"]
+        assert _first_args(attr_doc.select(r'service[c\+d="plus_val"]')) == ["my-app"]
+        assert _first_args(attr_doc.select(r'service[x\~y="tilde_val"]')) == ["my-app"]
+        assert _first_args(attr_doc.select(r'service[a\,b="comma_val"]')) == ["my-app"]
+
+    def test_unquoted_key_with_escaped_brackets(self, attr_doc: KdlDocument) -> None:
+        assert _first_args(attr_doc.select(r'service[nested\[key\]="bracket_val"]')) == ["my-app"]
+
+    def test_unquoted_key_with_escaped_space(self, attr_doc: KdlDocument) -> None:
+        assert _first_args(attr_doc.select(r'service[spaced\ key="space_val"]')) == ["my-app"]
+
+    def test_unquoted_key_with_escaped_number(self, attr_doc: KdlDocument) -> None:
+        assert _first_args(attr_doc.select(r'service[\0="prop_zero"]')) == ["my-app"]
+        assert _first_args(attr_doc.select(r'service[\0="sec_zero"]')) == ["secondary"]
+
+    def test_unquoted_key_escaped_operators(self, attr_doc: KdlDocument) -> None:
+        assert _first_args(attr_doc.select(r'service[app\.name^="api"]')) == ["my-app"]
+        assert _first_args(attr_doc.select(r'service[foo\:bar$="az"]')) == ["my-app"]
+        assert _first_args(attr_doc.select(r'service[a\>b~="gt"]')) == ["my-app"]
+
+    def test_unquoted_key_escaped_existence(self, attr_doc: KdlDocument) -> None:
+        assert _first_args(attr_doc.select(r"service[app\.name]")) == ["my-app", "secondary"]
+        assert _first_args(attr_doc.select(r"service[foo\:bar]")) == ["my-app", "secondary"]
+        assert _first_args(attr_doc.select(r"service[a\>b]")) == ["my-app"]
+
+
+class TestPositionalArgumentVsNumericPropertyKey:
+    def test_unquoted_number_matches_positional_arg_0(self, attr_doc: KdlDocument) -> None:
+        assert _first_args(attr_doc.select('service[0="my-app"]')) == ["my-app"]
+        assert _first_args(attr_doc.select('service[0="secondary"]')) == ["secondary"]
+        assert _first_args(attr_doc.select('service[0="prop_zero"]')) == []
+
+    def test_quoted_number_matches_property_with_string_key(self, attr_doc: KdlDocument) -> None:
+        assert _first_args(attr_doc.select('service["0"="prop_zero"]')) == ["my-app"]
+        assert _first_args(attr_doc.select("service['0'='prop_zero']")) == ["my-app"]
+        assert _first_args(attr_doc.select('service["0"="sec_zero"]')) == ["secondary"]
+        assert _first_args(attr_doc.select('service["0"="my-app"]')) == []
+        assert _first_args(attr_doc.select("service['0'='my-app']")) == []
+
+    def test_unquoted_vs_quoted_number_at_index_1(self, attr_doc: KdlDocument) -> None:
+        assert _first_args(attr_doc.select('service[1="backend"]')) == ["my-app"]
+        assert _first_args(attr_doc.select('service[1="frontend"]')) == ["secondary"]
+        assert _first_args(attr_doc.select('service["1"="prop_one"]')) == ["my-app"]
+        assert _first_args(attr_doc.select("service['1'='prop_one']")) == ["my-app"]
+        assert _first_args(attr_doc.select('service[1="prop_one"]')) == []
+        assert _first_args(attr_doc.select('service["1"="backend"]')) == []
+
+    def test_existence_unquoted_vs_quoted_number(self, attr_doc: KdlDocument) -> None:
+        # worker has args: "worker-1" (0), "active" (1), 100 (2)
+        # worker has props: "0"="w0", "1"="w1", "2"="w2"
+        assert len(attr_doc.select("worker[0]")) == 1
+        assert len(attr_doc.select("worker[1]")) == 1
+        assert len(attr_doc.select("worker[2]")) == 1
+        assert len(attr_doc.select("worker[3]")) == 0
+
+        assert len(attr_doc.select('worker["0"]')) == 1
+        assert len(attr_doc.select("worker['0']")) == 1
+        assert len(attr_doc.select('worker["1"]')) == 1
+        assert len(attr_doc.select('worker["2"]')) == 1
+        assert len(attr_doc.select('worker["3"]')) == 0
+
+    def test_operators_on_numeric_keys(self, attr_doc: KdlDocument) -> None:
+        assert len(attr_doc.select('worker["0"^="w"]')) == 1
+        assert len(attr_doc.select('worker["0"$="0"]')) == 1
+        assert len(attr_doc.select('worker["0"~="w"]')) == 1
+        assert len(attr_doc.select('worker[1^="act"]')) == 1
+        assert len(attr_doc.select('worker[1$="ive"]')) == 1
+        assert len(attr_doc.select('worker[1~="cti"]')) == 1
+
+
+class TestDisambiguatedAttributeKeysCombinatorsAndPseudoClasses:
+    def test_child_combinator_with_disambiguated_keys(self, attr_doc: KdlDocument) -> None:
+        r = attr_doc.select('service["app.name"="api-gateway"] > route["api.version"="v1"]')
+        assert len(r) == 1
+        assert r[0].get_arg(0) == "/users"
+
+        r2 = attr_doc.select('service[0="my-app"] > route["0"="route_zero"]')
+        assert len(r2) == 1
+        assert r2[0].get_arg(0) == "/users"
+
+        r3 = attr_doc.select('service[0="my-app"] > route["0"="item_zero"]')
+        assert len(r3) == 1
+        assert r3[0].get_arg(0) == "/items"
+
+    def test_descendant_combinator_with_disambiguated_keys(self, attr_doc: KdlDocument) -> None:
+        r = attr_doc.select('service[\'foo:bar\'="baz"] config["db.host"="localhost"]')
+        assert len(r) == 1
+        assert r[0].name == "config"
+
+    def test_multiple_filters_on_same_node(self, attr_doc: KdlDocument) -> None:
+        r = attr_doc.select('service[0="my-app"][1="backend"]["0"="prop_zero"]["app.name"="api-gateway"]')
+        assert _first_args(r) == ["my-app"]
+
+        r_mismatch = attr_doc.select('service[0="my-app"][1="frontend"]')
+        assert r_mismatch == []
+
+    def test_pseudo_class_not_with_disambiguated_keys(self, attr_doc: KdlDocument) -> None:
+        r = attr_doc.select('service:not(["app.name"="web-client"])')
+        assert _first_args(r) == ["my-app"]
+
+        r2 = attr_doc.select('service:not([0="secondary"])')
+        assert _first_args(r2) == ["my-app"]
+
+        r3 = attr_doc.select('service:not(["0"="sec_zero"])')
+        assert _first_args(r3) == ["my-app"]
+
+        r4 = attr_doc.select(r'service:not([foo\:bar="qux"])')
+        assert _first_args(r4) == ["my-app"]
+
+    def test_pseudo_class_has_with_disambiguated_keys(self, attr_doc: KdlDocument) -> None:
+        r = attr_doc.select('service:has(> route["api.version"="v2"])')
+        assert _first_args(r) == ["my-app"]
+
+        r2 = attr_doc.select('service:has(> route["0"="item_zero"])')
+        assert _first_args(r2) == ["my-app"]
+
+        r3 = attr_doc.select('service:has(config["db.host"="localhost"])')
+        assert _first_args(r3) == ["my-app"]
+
+
+class TestDisambiguatedAttributeKeysPublicAPIs:
+    def test_select_returns_list(self, attr_doc: KdlDocument) -> None:
+        r = attr_doc.select('service["0"="prop_zero"]')
+        assert isinstance(r, list)
+        assert len(r) == 1
+        assert r[0].get_arg(0) == "my-app"
+
+    def test_select_one_returns_node_or_none(self, attr_doc: KdlDocument) -> None:
+        node = attr_doc.select_one('service["app.name"="api-gateway"]')
+        assert node is not None
+        assert node.get_arg(0) == "my-app"
+
+        none_node = attr_doc.select_one('service["app.name"="nonexistent"]')
+        assert none_node is None
+
+    def test_kdl_node_select_and_select_one(self, attr_doc: KdlDocument) -> None:
+        srv = attr_doc.select_one('service["0"="prop_zero"]')
+        assert srv is not None
+
+        routes = srv.select('route["api.version"="v1"]')
+        assert len(routes) == 1
+        assert routes[0].get_arg(0) == "/users"
+
+        route = srv.select_one('route["api.version"="v1"]')
+        assert route is not None
+        assert route.get_arg(0) == "/users"
+
+        missing = srv.select_one('route["api.version"="v99"]')
+        assert missing is None
+
+    def test_kdl_node_matches(self, attr_doc: KdlDocument) -> None:
+        srv = attr_doc.select_one('service[0="my-app"]')
+        assert srv is not None
+
+        # Positional arg index
+        assert srv.matches('service[0="my-app"]') is True
+        assert srv.matches('service[0="prop_zero"]') is False
+
+        # Quoted property keys
+        assert srv.matches('service["0"="prop_zero"]') is True
+        assert srv.matches("service['0'='prop_zero']") is True
+        assert srv.matches('service["0"="my-app"]') is False
+        assert srv.matches("service['0'='my-app']") is False
+
+        assert srv.matches('service["app.name"="api-gateway"]') is True
+        assert srv.matches("service['app.name'='api-gateway']") is True
+        assert srv.matches('service["app.name"="web-client"]') is False
+
+        # Backslash escaped property keys
+        assert srv.matches(r'service[app\.name="api-gateway"]') is True
+        assert srv.matches(r'service[foo\:bar="baz"]') is True
+        assert srv.matches(r'service[foo\:bar="qux"]') is False
+        assert srv.matches(r'service[\0="prop_zero"]') is True
+
+
+class TestDisambiguatedAttributeKeysErrors:
+    def test_unterminated_double_quote_key(self, attr_doc: KdlDocument) -> None:
+        with pytest.raises(SelectorError, match="Unterminated string"):
+            attr_doc.select('service["unterminated]')
+
+    def test_unterminated_single_quote_key(self, attr_doc: KdlDocument) -> None:
+        with pytest.raises(SelectorError, match="Unterminated string"):
+            attr_doc.select("service['unterminated]")
+
+    def test_unterminated_escape_in_key(self, attr_doc: KdlDocument) -> None:
+        with pytest.raises(SelectorError, match="Unterminated escape sequence"):
+            attr_doc.select("service[app\\")
+
+    def test_float_positional_index(self, attr_doc: KdlDocument) -> None:
+        with pytest.raises(SelectorError, match="Expected integer index"):
+            attr_doc.select('service[1.5="val"]')
+
+    def test_invalid_token_as_key(self, attr_doc: KdlDocument) -> None:
+        with pytest.raises(SelectorError, match="Expected key name or index"):
+            attr_doc.select('service[#true="val"]')
+
+
+class TestDisambiguatedAttributeKeysBackwardCompatibility:
+    def test_standard_unquoted_properties(self, doc: KdlDocument) -> None:
+        assert _names(doc.select("app[version]")) == ["app"]
+        assert _names(doc.select('app[version="1.0.0"]')) == ["app"]
+        assert _first_args(doc.select("server[port=8080]")) == ["primary"]
+        assert _first_args(doc.select("server[tls=#true]")) == ["primary"]
+
+    def test_standard_positional_arguments(self, doc: KdlDocument) -> None:
+        assert _first_args(doc.select("server[0]")) == ["primary", "replica"]
+        assert _first_args(doc.select('server[0="primary"]')) == ["primary"]
+        assert _first_args(doc.select('route[1="/api/users"]')) == ["GET", "POST"]
+        assert _first_args(doc.select('route[*="POST"]')) == ["POST"]
+
+    def test_standard_property_type_annotations(self, doc: KdlDocument) -> None:
+        assert _names(doc.select("backend[(u16)port=6379]")) == ["backend"]
+        assert _names(doc.select("limits[(u32)max-conn=1000]")) == ["limits"]
+
