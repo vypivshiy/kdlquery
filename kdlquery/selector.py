@@ -460,7 +460,7 @@ class SelectorParser:
             key: str | int = self._advance().value
             if not isinstance(key, int):
                 raise SelectorError(f"Expected integer index, got '{key}'")
-        elif self._cur().typ == _TokType.IDENT:
+        elif self._cur().typ in (_TokType.IDENT, _TokType.STRING):
             key = self._advance().value
         else:
             raise SelectorError(f"Expected key name or index, got '{self._cur().raw}'")
