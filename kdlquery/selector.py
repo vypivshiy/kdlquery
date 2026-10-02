@@ -257,7 +257,7 @@ class SelectorLexer:
             return self._read_string(ch)
         if ch.isdigit():
             return self._read_number()
-        if ch not in _SPECIAL and not ch.isspace():
+        if ch == "\\" or (ch not in _SPECIAL and not ch.isspace()):
             return self._read_ident()
         raise SelectorError(f"Unexpected character '{ch}' at position {self._i}")
 
@@ -300,14 +300,24 @@ class SelectorLexer:
 
     def _read_ident(self) -> _Tok:
         start = self._i
-        while (
-            self._i < len(self._src)
-            and self._src[self._i] not in _SPECIAL
-            and not self._src[self._i].isspace()
-        ):
-            self._i += 1
+        parts: list[str] = []
+        while self._i < len(self._src):
+            ch = self._src[self._i]
+            if ch == "\\":
+                if self._i + 1 >= len(self._src):
+                    raise SelectorError(
+                        f"Unterminated escape sequence at position {self._i}"
+                    )
+                self._i += 1
+                parts.append(self._src[self._i])
+                self._i += 1
+            elif ch not in _SPECIAL and not ch.isspace():
+                parts.append(ch)
+                self._i += 1
+            else:
+                break
         raw = self._src[start : self._i]
-        return _Tok(_TokType.IDENT, raw, raw)
+        return _Tok(_TokType.IDENT, raw, "".join(parts))
 
 
 # ---------------------------------------------------------------------------
@@ -416,7 +426,7 @@ class SelectorParser:
         self._expect(_TokType.LPAREN)
         ident = self._expect(_TokType.IDENT)
         self._expect(_TokType.RPAREN)
-        return f"({ident.raw})"
+        return f"({ident.value})"
 
     def _filter(self) -> AttributeFilter:
         self._expect(_TokType.LBRACKET)
