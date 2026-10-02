@@ -5,9 +5,9 @@ Support quoted strings (`("type")`, `('type')`) and backslash escapes (`(my\/typ
 
 **Blocked by:** 01-quoted-node-selectors, 02-backslash-escaped-identifiers
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Type annotations on node selectors accept double-quoted and single-quoted strings (e.g. `("my/type")node`, `('custom:v1')node`).
-- [ ] Type annotations accept backslash-escaped identifiers without quotes (e.g. `(my\/type)node`, `(custom\:v1)node`).
-- [ ] Type annotations within attribute filters accept quotes and backslash escapes (e.g. `node[("u:16")port=8080]`, `node[(u\:16)port=8080]`).
-- [ ] Matching correctly compares against `KdlNode.type_annotation` and property value type annotations.
+- [x] Type annotations on node selectors accept double-quoted and single-quoted strings (e.g. `("my/type")node`, `('custom:v1')node`).
+- [x] Type annotations accept backslash-escaped identifiers without quotes (e.g. `(my\/type)node`, `(custom\:v1)node`).
+- [x] Type annotations within attribute filters accept quotes and backslash escapes (e.g. `node[("u:16")port=8080]`, `node[(u\:16)port=8080]`).
+- [x] Matching correctly compares against `KdlNode.type_annotation` and property value type annotations.

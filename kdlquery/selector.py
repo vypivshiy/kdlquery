@@ -424,9 +424,15 @@ class SelectorParser:
 
     def _type_annotation(self) -> str:
         self._expect(_TokType.LPAREN)
-        ident = self._expect(_TokType.IDENT)
+        tok = self._cur()
+        if tok.typ in (_TokType.IDENT, _TokType.STRING):
+            self._advance()
+        else:
+            raise SelectorError(
+                f"Expected type annotation identifier or string, got '{tok.raw}'"
+            )
         self._expect(_TokType.RPAREN)
-        return f"({ident.value})"
+        return f"({tok.value})"
 
     def _filter(self) -> AttributeFilter:
         self._expect(_TokType.LBRACKET)
@@ -588,9 +594,45 @@ class SelectorParser:
 # ---------------------------------------------------------------------------
 
 
+def _normalize_type_annotation(ann: str | None) -> str | None:
+    if ann is None:
+        return None
+    s = ann.strip()
+    while len(s) >= 2 and s.startswith("(") and s.endswith(")"):
+        s = s[1:-1].strip()
+    if len(s) >= 2 and (
+        (s.startswith('"') and s.endswith('"')) or (s.startswith("'") and s.endswith("'"))
+    ):
+        if s.startswith('"'):
+            from .parser import _decode_quoted
+
+            try:
+                return _decode_quoted(s)
+            except ValueError:
+                pass
+        inner = s[1:-1]
+        parts: list[str] = []
+        i = 0
+        while i < len(inner):
+            if inner[i] == "\\" and i + 1 < len(inner):
+                i += 1
+                parts.append(inner[i])
+            else:
+                parts.append(inner[i])
+            i += 1
+        return "".join(parts)
+    return s
+
+
 class SelectorMatcher:
     def __init__(self, context: MatchContext):
         self._ctx = context
+
+    @staticmethod
+    def _type_annotations_match(actual: str | None, expected: str | None) -> bool:
+        if actual is None or expected is None:
+            return False
+        return _normalize_type_annotation(actual) == _normalize_type_annotation(expected)
 
     def match(self, selector: SelectorList) -> list[KdlNode]:
         results: list[KdlNode] = []
@@ -683,11 +725,8 @@ class SelectorMatcher:
     def _matches_node(self, node: KdlNode, sel: NodeSelector) -> bool:
         if sel.name is not None and node.name != sel.name:
             return False
-        if (
-            sel.type_annotation is not None
-            and node.type_annotation != sel.type_annotation
-        ):
-            return False
+        if sel.type_annotation is not None:
+            return self._type_annotations_match(node.type_annotation, sel.type_annotation)
         return True
 
     def _matches_filter(self, node: KdlNode, filt: AttributeFilter) -> bool:
@@ -708,7 +747,7 @@ class SelectorMatcher:
         kv = node.properties[key]
         if (
             filt.type_annotation is not None
-            and kv.type_annotation != filt.type_annotation
+            and not self._type_annotations_match(kv.type_annotation, filt.type_annotation)
         ):
             return False
         if filt.op == "exists":
@@ -723,7 +762,7 @@ class SelectorMatcher:
         kv = node.args[idx]
         if (
             filt.type_annotation is not None
-            and kv.type_annotation != filt.type_annotation
+            and not self._type_annotations_match(kv.type_annotation, filt.type_annotation)
         ):
             return False
         if filt.op == "exists":

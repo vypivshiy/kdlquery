@@ -1442,3 +1442,375 @@ class TestSelectorLexerEscaping:
             toks = SelectorLexer(raw_ident).tokenize()
             assert toks[0].raw == raw_ident
             assert toks[0].value == expected_val
+
+
+# ---------------------------------------------------------------------------
+# Disambiguated type annotations (Ticket 03)
+# ---------------------------------------------------------------------------
+
+KDL_TYPED_DOC = r"""/- kdl-version 2
+
+("my/custom:type")service "srv_quoted" port=("u:16")8080 active=#true {
+    ("child/nested:type")worker "w1"
+    (nested:type2)worker "w2"
+}
+
+(custom:v1)service "srv_unquoted" port=(u:16)8081 active=#false {
+    ("child/nested:type")worker "w3"
+}
+
+("ns:type")app "app1" ("u:16")100 (custom:v1)200 {
+    (custom:v1)setting "s1"
+}
+
+("a>b")node_gt "gt_node"
+("a+b")node_plus "plus_node"
+("a~b")node_tilde "tilde_node"
+("a,b")node_comma "comma_node"
+("spaced type")node_space "space_node"
+
+untyped_node "no_type" port=8082
+"""
+
+
+@pytest.fixture()
+def typed_doc() -> KdlDocument:
+    return parse(KDL_TYPED_DOC)
+
+
+class TestDisambiguatedTypeAnnotationsQuoted:
+    def test_double_quoted_type_on_node(self, typed_doc: KdlDocument) -> None:
+        r = typed_doc.select('("my/custom:type")service')
+        assert _first_args(r) == ["srv_quoted"]
+
+    def test_double_quoted_type_without_node_name(self, typed_doc: KdlDocument) -> None:
+        r = typed_doc.select('("my/custom:type")')
+        assert _first_args(r) == ["srv_quoted"]
+
+    def test_double_quoted_type_with_wildcard(self, typed_doc: KdlDocument) -> None:
+        r = typed_doc.select('("my/custom:type")*')
+        assert _first_args(r) == ["srv_quoted"]
+
+    def test_double_quoted_type_matching_unquoted_kdl(self, typed_doc: KdlDocument) -> None:
+        r = typed_doc.select('("custom:v1")service')
+        assert _first_args(r) == ["srv_unquoted"]
+
+    def test_double_quoted_special_characters_in_type(self, typed_doc: KdlDocument) -> None:
+        assert _first_args(typed_doc.select('("a>b")node_gt')) == ["gt_node"]
+        assert _first_args(typed_doc.select('("a+b")node_plus')) == ["plus_node"]
+        assert _first_args(typed_doc.select('("a~b")node_tilde')) == ["tilde_node"]
+        assert _first_args(typed_doc.select('("a,b")node_comma')) == ["comma_node"]
+        assert _first_args(typed_doc.select('("spaced type")node_space')) == ["space_node"]
+
+    def test_single_quoted_type_on_node(self, typed_doc: KdlDocument) -> None:
+        r = typed_doc.select("('my/custom:type')service")
+        assert _first_args(r) == ["srv_quoted"]
+
+    def test_single_quoted_type_without_node_name(self, typed_doc: KdlDocument) -> None:
+        r = typed_doc.select("('my/custom:type')")
+        assert _first_args(r) == ["srv_quoted"]
+
+    def test_single_quoted_type_with_wildcard(self, typed_doc: KdlDocument) -> None:
+        r = typed_doc.select("('my/custom:type')*")
+        assert _first_args(r) == ["srv_quoted"]
+
+    def test_single_quoted_type_matching_unquoted_kdl(self, typed_doc: KdlDocument) -> None:
+        r = typed_doc.select("('custom:v1')service")
+        assert _first_args(r) == ["srv_unquoted"]
+
+    def test_single_quoted_special_characters_in_type(self, typed_doc: KdlDocument) -> None:
+        assert _first_args(typed_doc.select("('a>b')node_gt")) == ["gt_node"]
+        assert _first_args(typed_doc.select("('spaced type')node_space")) == ["space_node"]
+
+
+class TestDisambiguatedTypeAnnotationsEscaped:
+    def test_escaped_type_matching_quoted_kdl(self, typed_doc: KdlDocument) -> None:
+        r = typed_doc.select(r"(my\/custom\:type)service")
+        assert _first_args(r) == ["srv_quoted"]
+
+    def test_escaped_type_without_node_name(self, typed_doc: KdlDocument) -> None:
+        r = typed_doc.select(r"(my\/custom\:type)")
+        assert _first_args(r) == ["srv_quoted"]
+
+    def test_escaped_type_with_wildcard(self, typed_doc: KdlDocument) -> None:
+        r = typed_doc.select(r"(my\/custom\:type)*")
+        assert _first_args(r) == ["srv_quoted"]
+
+    def test_escaped_type_matching_unquoted_kdl(self, typed_doc: KdlDocument) -> None:
+        r = typed_doc.select(r"(custom\:v1)service")
+        assert _first_args(r) == ["srv_unquoted"]
+
+    def test_escaped_special_characters_in_type(self, typed_doc: KdlDocument) -> None:
+        assert _first_args(typed_doc.select(r"(a\>b)node_gt")) == ["gt_node"]
+        assert _first_args(typed_doc.select(r"(a\+b)node_plus")) == ["plus_node"]
+        assert _first_args(typed_doc.select(r"(a\~b)node_tilde")) == ["tilde_node"]
+        assert _first_args(typed_doc.select(r"(a\,b)node_comma")) == ["comma_node"]
+        assert _first_args(typed_doc.select(r"(spaced\ type)node_space")) == ["space_node"]
+
+
+class TestDisambiguatedTypeAnnotationsInFilters:
+    def test_property_type_double_quoted(self, typed_doc: KdlDocument) -> None:
+        # Match quoted KDL property type
+        r1 = typed_doc.select('service[("u:16")port=8080]')
+        assert _first_args(r1) == ["srv_quoted"]
+
+        # Match unquoted KDL property type
+        r2 = typed_doc.select('service[("u:16")port=8081]')
+        assert _first_args(r2) == ["srv_unquoted"]
+
+        # Existence filter with type annotation
+        r3 = typed_doc.select('service[("u:16")port]')
+        assert _first_args(r3) == ["srv_quoted", "srv_unquoted"]
+
+    def test_property_type_single_quoted(self, typed_doc: KdlDocument) -> None:
+        r1 = typed_doc.select("service[('u:16')port=8080]")
+        assert _first_args(r1) == ["srv_quoted"]
+
+        r2 = typed_doc.select("service[('u:16')port=8081]")
+        assert _first_args(r2) == ["srv_unquoted"]
+
+        r3 = typed_doc.select("service[('u:16')port]")
+        assert _first_args(r3) == ["srv_quoted", "srv_unquoted"]
+
+    def test_property_type_backslash_escaped(self, typed_doc: KdlDocument) -> None:
+        r1 = typed_doc.select(r"service[(u\:16)port=8080]")
+        assert _first_args(r1) == ["srv_quoted"]
+
+        r2 = typed_doc.select(r"service[(u\:16)port=8081]")
+        assert _first_args(r2) == ["srv_unquoted"]
+
+        r3 = typed_doc.select(r"service[(u\:16)port]")
+        assert _first_args(r3) == ["srv_quoted", "srv_unquoted"]
+
+    def test_property_type_mismatch_returns_empty(self, typed_doc: KdlDocument) -> None:
+        assert typed_doc.select('service[("i32")port]') == []
+        assert typed_doc.select('untyped_node[("u:16")port]') == []
+
+    def test_argument_type_double_quoted(self, typed_doc: KdlDocument) -> None:
+        # Match quoted argument type
+        r1 = typed_doc.select('app[("u:16")1=100]')
+        assert _first_args(r1) == ["app1"]
+
+        # Match unquoted argument type
+        r2 = typed_doc.select('app[("custom:v1")2=200]')
+        assert _first_args(r2) == ["app1"]
+
+        # Argument type existence check
+        r3 = typed_doc.select('app[("u:16")1]')
+        assert _first_args(r3) == ["app1"]
+
+    def test_argument_type_single_quoted(self, typed_doc: KdlDocument) -> None:
+        r1 = typed_doc.select("app[('u:16')1=100]")
+        assert _first_args(r1) == ["app1"]
+
+        r2 = typed_doc.select("app[('custom:v1')2=200]")
+        assert _first_args(r2) == ["app1"]
+
+    def test_argument_type_backslash_escaped(self, typed_doc: KdlDocument) -> None:
+        r1 = typed_doc.select(r"app[(u\:16)1=100]")
+        assert _first_args(r1) == ["app1"]
+
+        r2 = typed_doc.select(r"app[(custom\:v1)2=200]")
+        assert _first_args(r2) == ["app1"]
+
+        r3 = typed_doc.select(r"app[(u\:16)1]")
+        assert _first_args(r3) == ["app1"]
+
+    def test_argument_type_mismatch_returns_empty(self, typed_doc: KdlDocument) -> None:
+        assert typed_doc.select('app[("i32")1=100]') == []
+
+
+class TestDisambiguatedTypeAnnotationsCombinators:
+    def test_descendant_combinator_with_types(self, typed_doc: KdlDocument) -> None:
+        r1 = typed_doc.select('("my/custom:type")service ("child/nested:type")worker')
+        assert _first_args(r1) == ["w1"]
+
+        r2 = typed_doc.select(r'(my\/custom\:type)service (nested\:type2)worker')
+        assert _first_args(r2) == ["w2"]
+
+        r3 = typed_doc.select('service ("child/nested:type")worker')
+        assert _first_args(r3) == ["w1", "w3"]
+
+    def test_child_combinator_with_types(self, typed_doc: KdlDocument) -> None:
+        r1 = typed_doc.select('("my/custom:type")service > ("child/nested:type")worker')
+        assert _first_args(r1) == ["w1"]
+
+        r2 = typed_doc.select(r'(my\/custom\:type)service > (nested\:type2)worker')
+        assert _first_args(r2) == ["w2"]
+
+        # Without whitespace
+        r3 = typed_doc.select('("my/custom:type")service>("child/nested:type")worker')
+        assert _first_args(r3) == ["w1"]
+
+    def test_adjacent_sibling_combinator_with_types(self, typed_doc: KdlDocument) -> None:
+        r = typed_doc.select(r'("child/nested:type")worker + (nested\:type2)worker')
+        assert _first_args(r) == ["w2"]
+
+    def test_general_sibling_combinator_with_types(self, typed_doc: KdlDocument) -> None:
+        r = typed_doc.select('("a>b")node_gt ~ ("a,b")node_comma')
+        assert _first_args(r) == ["comma_node"]
+
+    def test_typed_node_and_typed_filter_with_child_combinator(
+        self, typed_doc: KdlDocument
+    ) -> None:
+        r = typed_doc.select(
+            '("my/custom:type")service[("u:16")port=8080] > ("child/nested:type")worker'
+        )
+        assert _first_args(r) == ["w1"]
+
+    def test_comma_union_with_types(self, typed_doc: KdlDocument) -> None:
+        r = typed_doc.select(r'("my/custom:type")service, (custom\:v1)service')
+        assert _first_args(r) == ["srv_quoted", "srv_unquoted"]
+
+
+class TestDisambiguatedTypeAnnotationsPseudoClasses:
+    def test_not_with_quoted_type(self, typed_doc: KdlDocument) -> None:
+        r1 = typed_doc.select('service > *:not(("child/nested:type"))')
+        assert _first_args(r1) == ["w2"]
+
+        r2 = typed_doc.select(r"service > *:not((child\/nested\:type))")
+        assert _first_args(r2) == ["w2"]
+
+        r3 = typed_doc.select("service > *:not(('child/nested:type'))")
+        assert _first_args(r3) == ["w2"]
+
+    def test_not_on_typed_node(self, typed_doc: KdlDocument) -> None:
+        r = typed_doc.select('service:not(("custom:v1"))')
+        assert _first_args(r) == ["srv_quoted"]
+
+    def test_has_with_quoted_type(self, typed_doc: KdlDocument) -> None:
+        r1 = typed_doc.select('service:has(("child/nested:type")worker)')
+        assert _first_args(r1) == ["srv_quoted", "srv_unquoted"]
+
+        r2 = typed_doc.select(r"service:has(> (nested\:type2)worker)")
+        assert _first_args(r2) == ["srv_quoted"]
+
+        r3 = typed_doc.select(r"service:has(> (custom\:v1)setting)")
+        assert r3 == []
+
+    def test_first_child_with_type(self, typed_doc: KdlDocument) -> None:
+        r = typed_doc.select('("child/nested:type")worker:first-child')
+        assert _first_args(r) == ["w1", "w3"]
+
+    def test_last_child_with_type(self, typed_doc: KdlDocument) -> None:
+        r = typed_doc.select(r"(nested\:type2)worker:last-child")
+        assert _first_args(r) == ["w2"]
+
+
+class TestDisambiguatedTypeAnnotationsPublicAPIs:
+    def test_select_one_with_types(self, typed_doc: KdlDocument) -> None:
+        node1 = typed_doc.select_one('("my/custom:type")service')
+        assert node1 is not None
+        assert node1.get_arg(0) == "srv_quoted"
+
+        node2 = typed_doc.select_one(r"(custom\:v1)service")
+        assert node2 is not None
+        assert node2.get_arg(0) == "srv_unquoted"
+
+        assert typed_doc.select_one('("nonexistent:type")service') is None
+
+    def test_kdl_node_select_and_select_one_with_types(self, typed_doc: KdlDocument) -> None:
+        srv = typed_doc.select_one('("my/custom:type")service')
+        assert srv is not None
+
+        # Subtree select
+        r1 = srv.select('("child/nested:type")worker')
+        assert _first_args(r1) == ["w1"]
+
+        r2 = srv.select(r"(nested\:type2)worker")
+        assert _first_args(r2) == ["w2"]
+
+        # Subtree select_one
+        w1 = srv.select_one('("child/nested:type")worker')
+        assert w1 is not None
+        assert w1.get_arg(0) == "w1"
+
+        assert srv.select_one('("nonexistent:type")') is None
+
+    def test_kdl_node_matches_with_types(self, typed_doc: KdlDocument) -> None:
+        srv = typed_doc.select_one('("my/custom:type")service')
+        assert srv is not None
+
+        # Matches type annotation variations
+        assert srv.matches('("my/custom:type")service') is True
+        assert srv.matches(r"(my\/custom\:type)service") is True
+        assert srv.matches("('my/custom:type')service") is True
+        assert srv.matches('("my/custom:type")') is True
+        assert srv.matches('("custom:v1")service') is False
+
+        # Matches property filter with type annotation
+        assert srv.matches('[("u:16")port=8080]') is True
+        assert srv.matches(r"[(u\:16)port=8080]") is True
+        assert srv.matches("[('u:16')port=8080]") is True
+        assert srv.matches('[("u:16")port=9999]') is False
+        assert srv.matches('[("i32")port=8080]') is False
+
+        # Matches pseudo-classes with types
+        assert srv.matches(':has(("child/nested:type")worker)') is True
+        assert srv.matches(':not(("custom:v1")service)') is True
+        assert srv.matches(':not(("my/custom:type")service)') is False
+
+    def test_synthetic_node_matching(self) -> None:
+        # Node created with unparenthesized type annotation
+        n1 = KdlNode.create("item", type_annotation="my/type")
+        assert n1.matches('("my/type")item') is True
+        assert n1.matches(r"(my\/type)item") is True
+        assert n1.matches("('my/type')item") is True
+        assert n1.matches('("other/type")item') is False
+
+        # Node created with parenthesized type annotation
+        n2 = KdlNode.create("item", type_annotation="(my/type)")
+        assert n2.matches('("my/type")item') is True
+        assert n2.matches(r"(my\/type)item") is True
+        assert n2.matches("('my/type')item") is True
+
+        # Node created with quoted parenthesized type annotation
+        n3 = KdlNode.create("item", type_annotation='("my/type")')
+        assert n3.matches('("my/type")item') is True
+        assert n3.matches(r"(my\/type)item") is True
+
+
+class TestDisambiguatedTypeAnnotationsErrors:
+    def test_unterminated_string_in_type_annotation(self, typed_doc: KdlDocument) -> None:
+        with pytest.raises(SelectorError, match="Unterminated string"):
+            typed_doc.select('("unterminated)node')
+
+        with pytest.raises(SelectorError, match="Unterminated string"):
+            typed_doc.select("('unterminated)node")
+
+        with pytest.raises(SelectorError, match="Unterminated string"):
+            typed_doc.select('node[("unterminated)port=8080]')
+
+    def test_unterminated_escape_in_type_annotation(self, typed_doc: KdlDocument) -> None:
+        with pytest.raises(SelectorError, match="Unterminated escape sequence"):
+            typed_doc.select("(foo\\")
+
+        with pytest.raises(SelectorError, match="Unterminated escape sequence"):
+            typed_doc.select("node[(foo\\")
+
+    def test_escaped_closing_paren_in_type_annotation_missing_rparen(
+        self, typed_doc: KdlDocument
+    ) -> None:
+        with pytest.raises(SelectorError, match="Expected RPAREN"):
+            typed_doc.select(r"(unterminated\)node")
+
+    def test_empty_type_annotation_raises_selector_error(self, typed_doc: KdlDocument) -> None:
+        with pytest.raises(SelectorError, match="Expected type annotation identifier or string"):
+            typed_doc.select("()node")
+
+        with pytest.raises(SelectorError, match="Expected type annotation identifier or string"):
+            typed_doc.select("node[()port=8080]")
+
+    def test_invalid_token_in_type_annotation_raises_selector_error(
+        self, typed_doc: KdlDocument
+    ) -> None:
+        with pytest.raises(SelectorError, match="Expected type annotation identifier or string"):
+            typed_doc.select("(=)node")
+
+        with pytest.raises(SelectorError, match="Expected type annotation identifier or string"):
+            typed_doc.select("(>)node")
+
+    def test_missing_rparen_raises_selector_error(self, typed_doc: KdlDocument) -> None:
+        with pytest.raises(SelectorError, match="Expected RPAREN"):
+            typed_doc.select('("my/type"node')
+
