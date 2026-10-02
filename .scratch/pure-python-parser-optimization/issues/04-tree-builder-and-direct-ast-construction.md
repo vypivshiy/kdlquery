@@ -5,12 +5,12 @@ Introduce a Tree Builder seam (`TreeBuilder`, `AstBuilder`, `CstBuilder`). Refac
 
 **Blocked by:** 03-regex-scanner-and-two-tier-lexer
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] `TreeBuilder` protocol defines builder lifecycle methods.
-- [ ] `AstBuilder` builds `KdlDocument` directly in a single pass without intermediate `CSTNode` allocations.
-- [ ] Parent references (`node.parent`) and document references (`node._document`) are wired in-flight during AST construction.
-- [ ] `CstBuilder` builds complete `CSTDocument` identical to previous parser output.
-- [ ] `kdlquery.parse(source)` uses `AstBuilder` for high-throughput AST generation.
-- [ ] `KDL2CSTParser().parse(source)` uses `CstBuilder` and passes all existing CST tests.
-- [ ] CSS3 selectors and document navigation (`select`, `select_one`, `iter_nodes`, `parents`, `siblings`) function identically.
+- [x] `TreeBuilder` protocol defines builder lifecycle methods.
+- [x] `AstBuilder` builds `KdlDocument` directly in a single pass without intermediate `CSTNode` allocations.
+- [x] Parent references (`node.parent`) and document references (`node._document`) are wired in-flight during AST construction.
+- [x] `CstBuilder` builds complete `CSTDocument` identical to previous parser output.
+- [x] `kdlquery.parse(source)` uses `AstBuilder` for high-throughput AST generation.
+- [x] `KDL2CSTParser().parse(source)` uses `CstBuilder` and passes all existing CST tests.
+- [x] CSS3 selectors and document navigation (`select`, `select_one`, `iter_nodes`, `parents`, `siblings`) function identically.

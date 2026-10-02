@@ -14,7 +14,8 @@ from .types import (
     Token,
     TokenType,
 )
-from .parser import KDL2CSTParser, KDLLexer
+from .builder import AstBuilder, CstBuilder, TreeBuilder
+from .parser import KDL2CSTParser, KDLLexer, _Parser
 from .reader import (
     DiagnosticCollector,
     KdlValue,
@@ -34,25 +35,27 @@ from .dict_reader import DictReader
 def parse(source: str) -> KdlDocument:
     """Parse a KDL 2.0 string into a KdlDocument tree.
 
-    This is the simplest entry point for most use cases. It parses the
-    source into a CST, converts it to a KdlNode tree, and builds the
-    parent and depth maps for structural queries.
+    Directly constructs a KdlDocument tree with parent and document
+    back-references wired in-flight via AstBuilder, avoiding intermediate
+    CST allocations.
 
     Args:
         source: A KDL 2.0 document as a string.
 
     Returns:
-        A KdlDocument with parent, depth, and sibling maps ready for
-        querying.
+        A KdlDocument ready for querying and navigation.
 
     Raises:
         KDLParseError: If the source is not valid KDL 2.0.
     """
-    cst = KDL2CSTParser().parse(source)
-    return KdlDocument.from_cst(cst)
+    tokens = KDLLexer(source).tokenize()
+    builder = AstBuilder()
+    p = _Parser(tokens, source=source, builder=builder)
+    return p.parse_document()
 
 
 __all__ = [
+    "AstBuilder",
     "CSTArgEntry",
     "CSTDocument",
     "CSTEntry",
@@ -61,6 +64,7 @@ __all__ = [
     "CSTPropEntry",
     "CSTTypeAnnotation",
     "CSTValue",
+    "CstBuilder",
     "KDL2CSTParser",
     "KDLParseError",
     "PARSE_ERROR_CODES",
@@ -69,6 +73,7 @@ __all__ = [
     "Span",
     "Token",
     "TokenType",
+    "TreeBuilder",
     "DiagnosticCollector",
     "KdlValue",
     "KdlNode",

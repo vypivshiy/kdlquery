@@ -3,7 +3,9 @@ from __future__ import annotations
 from bisect import bisect_right
 import math
 import re
-from typing import Any, NamedTuple
+from typing import Any, Generic, NamedTuple, TypeVar, overload
+
+from .builder import AstBuilder, CstBuilder, TreeBuilder, _NULL_BUILDER
 
 from .types import (
     CSTArgEntry,
@@ -887,18 +889,48 @@ class KDLLexer:
 class KDL2CSTParser:
     def parse(self, source: str) -> CSTDocument:
         tokens = KDLLexer(source).tokenize()
-        p = _Parser(tokens, source=source)
+        builder = CstBuilder()
+        p = _Parser(tokens, source=source, builder=builder)
         return p.parse_document()
 
 
-class _Parser:
-    def __init__(self, tokens: list[Token], source: str | None = None):
+T = TypeVar("T")
+
+
+class _Parser(Generic[T]):
+    @overload
+    def __init__(
+        self: _Parser[CSTDocument],
+        tokens: list[Token],
+        source: str | None = None,
+        builder: None = None,
+    ) -> None: ...
+
+    @overload
+    def __init__(
+        self: _Parser[T],
+        tokens: list[Token],
+        source: str | None = None,
+        builder: TreeBuilder[T] = ...,
+    ) -> None: ...
+
+    def __init__(
+        self,
+        tokens: list[Token],
+        source: str | None = None,
+        builder: TreeBuilder[Any] | None = None,
+    ):
         self.tokens = tokens
         self.source = source
         self.i = 0
+        if builder is None:
+            self.builder: TreeBuilder[Any] = CstBuilder()
+            self._is_cst_builder = True
+        else:
+            self.builder = builder
+            self._is_cst_builder = isinstance(builder, CstBuilder)
 
-    def parse_document(self) -> CSTDocument:
-        nodes: list[CSTNode] = []
+    def parse_document(self) -> T:
         self._skip_separators()
         start = self._peek().span.start
 
@@ -915,7 +947,7 @@ class _Parser:
                 self._skip_separators()
                 continue
 
-            nodes.append(self._parse_node())
+            self._parse_node()
             consumed = self._consume_terminators()
             if not consumed and not self._at(TokenType.EOF):
                 raise self._error_here(
@@ -925,7 +957,8 @@ class _Parser:
             self._skip_separators()
 
         end = self._peek().span.end
-        return CSTDocument(nodes=nodes, span=Span(start, end))
+        res = self.builder.finish_document(Span(start, end))
+        return res  # type: ignore[no-any-return]
 
     def _parse_discarded_component(self, *, allow_node: bool) -> None:
         # Slashdash can drop node / argument / property / children block.
@@ -934,12 +967,18 @@ class _Parser:
             self._discard_children_block()
             return
 
-        if allow_node:
-            self._parse_node()
-            return
-
-        # property or argument
-        self._parse_entry()
+        saved_builder = self.builder
+        saved_is_cst = self._is_cst_builder
+        self.builder = _NULL_BUILDER
+        self._is_cst_builder = False
+        try:
+            if allow_node:
+                self._parse_node()
+            else:
+                self._parse_entry()
+        finally:
+            self.builder = saved_builder
+            self._is_cst_builder = saved_is_cst
 
     def _discard_children_block(self) -> None:
         self._expect(TokenType.LBRACE)
@@ -959,14 +998,32 @@ class _Parser:
                 depth -= 1
             self._advance()
 
-    def _parse_node(self) -> CSTNode:
+    def _parse_node(self) -> None:
         node_type = self._try_parse_type_annotation()
         name = self._parse_identifier_like()
 
-        entries: list[CSTEntry] = []
-        children: list[CSTNode] = []
+        start_span = Span(
+            node_type.span.start if node_type else name.span.start,
+            name.span.end,
+        )
+
+        if self._is_cst_builder:
+            self.builder.start_node(
+                name.value,
+                node_type.raw if node_type else None,
+                start_span,
+                name_raw=name.raw,
+                name_span=name.span,
+                type_span=node_type.span if node_type else None,
+            )
+        else:
+            self.builder.start_node(
+                name.value,
+                node_type.raw if node_type else None,
+                start_span,
+            )
+
         has_children_block = False
-        children_block_span: Span | None = None
 
         # Zero-space: track end offset of last significant token before each entry
         prev_end = name.span.end.offset
@@ -991,9 +1048,8 @@ class _Parser:
                     "Expected whitespace before entry",
                     code="expected-whitespace",
                 )
-            entry = self._parse_entry()
-            prev_end = entry.span.end.offset
-            entries.append(entry)
+            entry_span = self._parse_entry()
+            prev_end = entry_span.end.offset
 
         while True:
             if self._match(TokenType.SLASHDASH):
@@ -1016,6 +1072,7 @@ class _Parser:
                 )
             has_children_block = True
             lbrace = self._prev()
+            self.builder.start_children(lbrace.span)
 
             self._skip_separators()
             while not self._at(TokenType.RBRACE):
@@ -1030,26 +1087,20 @@ class _Parser:
                         "Unterminated children block",
                         code="children-block/unterminated",
                     )
-                children.append(self._parse_node())
+                self._parse_node()
                 self._consume_terminators()
                 self._skip_separators()
             rbrace = self._expect(TokenType.RBRACE)
             children_block_span = Span(lbrace.span.start, rbrace.span.end)
-            # Do NOT call _skip_separators() here: leave any trailing newlines
-            # for the document/parent level to consume as node terminators.
+            self.builder.end_children(children_block_span)
 
         end = self._prev().span.end if self.i > 0 else name.span.end
-        return CSTNode(
-            name=name,
-            type_annotation=node_type,
-            entries=entries,
-            children=children,
-            span=Span((node_type.span.start if node_type else name.span.start), end),
-            has_children_block=has_children_block,
-            children_block_span=children_block_span,
+        node_span = Span(
+            (node_type.span.start if node_type else name.span.start), end
         )
+        self.builder.end_node(node_span)
 
-    def _parse_entry(self) -> CSTEntry:
+    def _parse_entry(self) -> Span:
         # property: key = value, where key is an identifier string
         if (
             self._is_identifier_token(self._peek())
@@ -1057,13 +1108,48 @@ class _Parser:
         ):
             key = self._parse_identifier_like()
             self._expect(TokenType.EQUAL)
-            value = self._parse_value_like()
-            return CSTPropEntry(
-                key=key, value=value, span=Span(key.span.start, value.span.end)
-            )
+            val, raw, val_span, ty, is_bare = self._parse_value_like_info()
+            entry_span = Span(key.span.start, val_span.end)
+            if self._is_cst_builder:
+                self.builder.add_prop(
+                    key.value,
+                    val,
+                    ty.raw if ty else None,
+                    entry_span,
+                    key_raw=key.raw,
+                    key_span=key.span,
+                    val_raw=raw,
+                    val_span=val_span,
+                    type_span=ty.span if ty else None,
+                    is_bare_ident=is_bare,
+                )
+            else:
+                self.builder.add_prop(
+                    key.value,
+                    val,
+                    ty.raw if ty else None,
+                    entry_span,
+                )
+            return entry_span
 
-        value = self._parse_value_like()
-        return CSTArgEntry(value=value, span=value.span)
+        val, raw, val_span, ty, is_bare = self._parse_value_like_info()
+        if self._is_cst_builder:
+            self.builder.add_arg(
+                val,
+                ty.raw if ty else None,
+                val_span,
+                raw=raw,
+                val_span=val_span,
+                type_span=ty.span if ty else None,
+                is_bare_ident=is_bare,
+            )
+        else:
+            self.builder.add_arg(
+                val,
+                ty.raw if ty else None,
+                val_span,
+            )
+        return val_span
 
     def _try_parse_type_annotation(self) -> CSTTypeAnnotation | None:
         if not self._match(TokenType.LPAREN):
@@ -1085,7 +1171,9 @@ class _Parser:
         self._advance()
         return CSTIdentifier(value=str(tok.value), raw=tok.raw, span=tok.span)
 
-    def _parse_value_like(self) -> CSTValue | CSTIdentifier:
+    def _parse_value_like_info(
+        self,
+    ) -> tuple[Any, str, Span, CSTTypeAnnotation | None, bool]:
         ty = self._try_parse_type_annotation()
         tok = self._peek()
 
@@ -1103,29 +1191,26 @@ class _Parser:
             else:
                 raw = tok.raw
                 start = tok.span.start
-            return CSTValue(
-                value=tok.value,
-                raw=raw,
-                span=Span(start, tok.span.end),
-                type_annotation=ty,
-            )
+            val_span = Span(start, tok.span.end)
+            return tok.value, raw, val_span, ty, False
 
         if tok.typ == TokenType.IDENT:
             self._advance()
             if ty:
-                # typed value with bare identifier string is still a string value
                 raw = self._slice(ty.span.start.offset, tok.span.end.offset)
-                return CSTValue(
-                    value=str(tok.value),
-                    raw=raw,
-                    span=Span(ty.span.start, tok.span.end),
-                    type_annotation=ty,
-                )
-            return CSTIdentifier(value=str(tok.value), raw=tok.raw, span=tok.span)
+                val_span = Span(ty.span.start, tok.span.end)
+                return str(tok.value), raw, val_span, ty, False
+            return str(tok.value), tok.raw, tok.span, None, True
 
         raise self._error_tok(
             tok, f"Expected value, got {tok.typ}", code="expected-value"
         )
+
+    def _parse_value_like(self) -> CSTValue | CSTIdentifier:
+        val, raw, span, ty, is_bare = self._parse_value_like_info()
+        if is_bare:
+            return CSTIdentifier(value=str(val), raw=raw, span=span)
+        return CSTValue(value=val, raw=raw, span=span, type_annotation=ty)
 
     def _is_node_terminator(self) -> bool:
         return (
@@ -1207,6 +1292,7 @@ class _Parser:
 
 
 __all__ = [
+    "AstBuilder",
     "CSTArgEntry",
     "CSTDocument",
     "CSTEntry",
@@ -1215,6 +1301,7 @@ __all__ = [
     "CSTPropEntry",
     "CSTTypeAnnotation",
     "CSTValue",
+    "CstBuilder",
     "KDL2CSTParser",
     "KDLParseError",
     "KDLLexer",
@@ -1223,6 +1310,8 @@ __all__ = [
     "Span",
     "Token",
     "TokenType",
+    "TreeBuilder",
+    "_Parser",
     "_build_line_starts",
     "_offset_to_position",
     "offset_to_position",
