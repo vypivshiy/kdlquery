@@ -5,11 +5,11 @@ Implement a precomputed `line_starts` offset table built once per document via n
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] `line_starts` table is constructed using regex finditer over newline characters.
-- [ ] `offset_to_position` computes 1-based line and column accurately using `bisect_right`.
-- [ ] Character-by-character `_check_disallowed_literal` loop is replaced by bulk `_DISALLOWED_RE` check.
-- [ ] BOM validation checks `source[1:]` in bulk.
-- [ ] Exact line, column, and error codes are preserved for all invalid inputs in compliance tests.
-- [ ] All existing tests pass.
+- [x] `line_starts` table is constructed using regex finditer over newline characters.
+- [x] `offset_to_position` computes 1-based line and column accurately using `bisect_right`.
+- [x] Character-by-character `_check_disallowed_literal` loop is replaced by bulk `_DISALLOWED_RE` check.
+- [x] BOM validation checks `source[1:]` in bulk.
+- [x] Exact line, column, and error codes are preserved for all invalid inputs in compliance tests.
+- [x] All existing tests pass.

@@ -8,7 +8,13 @@ from kdlquery.types import (
     CSTValue,
     KDLParseError,
 )
-from kdlquery.parser import KDL2CSTParser
+from kdlquery.parser import (
+    KDL2CSTParser,
+    KDLLexer,
+    _build_line_starts,
+    _offset_to_position,
+    offset_to_position,
+)
 
 
 _ROOT = Path(__file__).parent
@@ -405,3 +411,84 @@ endpoint name="service" \\
         assert len(doc_sameline.nodes) == 1
         assert doc_sameline.nodes[0].name.value == "node"
         assert len(doc_sameline.nodes[0].entries) == 1
+
+
+def test_build_line_starts() -> None:
+    assert _build_line_starts("") == [0]
+    assert _build_line_starts("node 1") == [0]
+    assert _build_line_starts("a\nb\r\nc\rd") == [0, 2, 5, 7]
+    assert _build_line_starts("line1\u0085line2\u000bline3\u000cline4\u2028line5\u2029line6") == [
+        0, 6, 12, 18, 24, 30
+    ]
+
+
+def test_offset_to_position_mapping() -> None:
+    source = "node {\n    sub 1\r\n    sub 2\n}"
+    line_starts = _build_line_starts(source)
+    # line 1: "node {\n" (0..6)
+    # line 2: "    sub 1\r\n" (7..17)
+    # line 3: "    sub 2\n" (18..27)
+    # line 4: "}" (28..28)
+    pos0 = _offset_to_position(line_starts, 0)
+    assert pos0.line == 1
+    assert pos0.column == 1
+
+    pos_nl1 = _offset_to_position(line_starts, 6)
+    assert pos_nl1.line == 1
+    assert pos_nl1.column == 7
+
+    pos_line2 = _offset_to_position(line_starts, 7)
+    assert pos_line2.line == 2
+    assert pos_line2.column == 1
+
+    pos_line2_sub = _offset_to_position(line_starts, 11)
+    assert pos_line2_sub.line == 2
+    assert pos_line2_sub.column == 5
+
+    pos_line3 = _offset_to_position(line_starts, 18)
+    assert pos_line3.line == 3
+    assert pos_line3.column == 1
+
+    pos_line4 = offset_to_position(line_starts, 28)
+    assert pos_line4.line == 4
+    assert pos_line4.column == 1
+
+    # KDLLexer helper method
+    lexer = KDLLexer(source)
+    assert lexer.offset_to_position(11) == pos_line2_sub
+
+
+def test_bulk_codepoint_validation_bom() -> None:
+    # BOM at offset 0 is allowed
+    doc = KDL2CSTParser().parse("\ufeffnode 1")
+    assert len(doc.nodes) == 1
+
+    # BOM after offset 0 is disallowed
+    with pytest.raises(KDLParseError) as exc:
+        KDL2CSTParser().parse("node \ufeff1")
+    assert exc.value.code == "bom-outside-start"
+    assert exc.value.line == 1
+    assert exc.value.col == 6
+
+
+def test_bulk_codepoint_validation_disallowed() -> None:
+    # Control code point
+    with pytest.raises(KDLParseError) as exc:
+        KDL2CSTParser().parse("first\nsecond \x08 third")
+    assert exc.value.code == "control-codepoint"
+    assert exc.value.line == 2
+    assert exc.value.col == 8
+
+    # Surrogate code point
+    with pytest.raises(KDLParseError) as exc:
+        KDL2CSTParser().parse("node \ud800")
+    assert exc.value.code == "surrogate-codepoint"
+    assert exc.value.line == 1
+    assert exc.value.col == 6
+
+    # Direction-control code point
+    with pytest.raises(KDLParseError) as exc:
+        KDL2CSTParser().parse("node\n  \u202e 1")
+    assert exc.value.code == "direction-control-codepoint"
+    assert exc.value.line == 2
+    assert exc.value.col == 3
