@@ -14,28 +14,28 @@ from kdlquery.reader import _EMPTY_SPAN, _Keyword
 
 
 class TestKdlValueCreate:
-    def test_create_int(self):
+    def test_create_int(self) -> None:
         v = KdlValue.create(42)
         assert v.value == 42
         assert v.type_annotation is None
         assert v.span == _EMPTY_SPAN
 
-    def test_create_with_type_annotation(self):
+    def test_create_with_type_annotation(self) -> None:
         v = KdlValue.create("x", type_annotation="(u8)")
         assert v.value == "x"
         assert v.type_annotation == "(u8)"
 
-    def test_create_preserves_python_types(self):
+    def test_create_preserves_python_types(self) -> None:
         assert KdlValue.create(True).value is True
         assert KdlValue.create(None).value is None
         assert KdlValue.create(3.14).value == 3.14
 
-    def test_keyword_wraps_raw_literal(self):
+    def test_keyword_wraps_raw_literal(self) -> None:
         v = KdlValue.keyword("#null")
         assert isinstance(v.value, _Keyword)
         assert v.value.raw == "#null"
 
-    def test_keyword_arbitrary_string(self):
+    def test_keyword_arbitrary_string(self) -> None:
         v = KdlValue.keyword("#custom-foo")
         assert v.value.raw == "#custom-foo"
 
@@ -46,7 +46,7 @@ class TestKdlValueCreate:
 
 
 class TestKdlNodeCreate:
-    def test_create_minimal(self):
+    def test_create_minimal(self) -> None:
         n = KdlNode.create("foo")
         assert n.name == "foo"
         assert n.args == []
@@ -54,11 +54,11 @@ class TestKdlNodeCreate:
         assert n.children == []
         assert n.type_annotation is None
 
-    def test_create_with_args(self):
+    def test_create_with_args(self) -> None:
         n = KdlNode.create("foo", args=[KdlValue.create(1), KdlValue.create("x")])
         assert [a.value for a in n.args] == [1, "x"]
 
-    def test_create_with_properties(self):
+    def test_create_with_properties(self) -> None:
         n = KdlNode.create(
             "foo",
             properties={"count": KdlValue.create(5), "flag": KdlValue.create(True)},
@@ -66,17 +66,17 @@ class TestKdlNodeCreate:
         assert n.get_prop("count") == 5
         assert n.get_prop("flag") is True
 
-    def test_create_with_children_wires_parent(self):
+    def test_create_with_children_wires_parent(self) -> None:
         child = KdlNode.create("c")
         parent = KdlNode.create("p", children=[child])
         assert child.parent is parent
         assert parent.children == [child]
 
-    def test_create_with_type_annotation(self):
+    def test_create_with_type_annotation(self) -> None:
         n = KdlNode.create("date", type_annotation="(published)")
         assert n.type_annotation == "(published)"
 
-    def test_create_copies_inputs(self):
+    def test_create_copies_inputs(self) -> None:
         args = [KdlValue.create(1)]
         n = KdlNode.create("foo", args=args)
         n.add_arg(KdlValue.create(2))
@@ -85,7 +85,7 @@ class TestKdlNodeCreate:
 
 
 class TestMutation:
-    def test_add_child_wires_parent(self):
+    def test_add_child_wires_parent(self) -> None:
         parent = KdlNode.create("p")
         child = KdlNode.create("c")
         ret = parent.add_child(child)
@@ -93,7 +93,7 @@ class TestMutation:
         assert child.parent is parent
         assert parent.children == [child]
 
-    def test_add_child_propagates_document(self):
+    def test_add_child_propagates_document(self) -> None:
         doc = parse("root { a }")
         root = doc.nodes[0]
         new_child = KdlNode.create("new")
@@ -104,7 +104,7 @@ class TestMutation:
         root.add_child(grand)
         assert grand.children[0].document is doc
 
-    def test_insert_child(self):
+    def test_insert_child(self) -> None:
         parent = KdlNode.create(
             "p", children=[KdlNode.create("a"), KdlNode.create("c")]
         )
@@ -112,14 +112,14 @@ class TestMutation:
         assert [c.name for c in parent.children] == ["a", "b", "c"]
         assert parent.children[1].parent is parent
 
-    def test_insert_child_negative_index(self):
+    def test_insert_child_negative_index(self) -> None:
         parent = KdlNode.create(
             "p", children=[KdlNode.create("a"), KdlNode.create("b")]
         )
         parent.insert_child(-1, KdlNode.create("z"))
         assert [c.name for c in parent.children] == ["a", "z", "b"]
 
-    def test_remove_child(self):
+    def test_remove_child(self) -> None:
         parent = KdlNode.create(
             "p", children=[KdlNode.create("a"), KdlNode.create("b")]
         )
@@ -128,19 +128,19 @@ class TestMutation:
         assert removed.parent is None
         assert len(parent.children) == 1
 
-    def test_add_arg(self):
+    def test_add_arg(self) -> None:
         n = KdlNode.create("x")
         n.add_arg(KdlValue.create(True))
         assert n.get_arg(0) is True
 
-    def test_set_prop_add_and_replace(self):
+    def test_set_prop_add_and_replace(self) -> None:
         n = KdlNode.create("x")
         n.set_prop("k", KdlValue.create(1))
         assert n.get_prop("k") == 1
         n.set_prop("k", KdlValue.create(2))
         assert n.get_prop("k") == 2
 
-    def test_remove_prop(self):
+    def test_remove_prop(self) -> None:
         n = KdlNode.create("x")
         n.set_prop("k", KdlValue.create(1))
         assert n.remove_prop("k") is True
@@ -149,18 +149,18 @@ class TestMutation:
 
 
 class TestDocumentMutation:
-    def test_add_node(self):
+    def test_add_node(self) -> None:
         doc = parse("a")
         doc.add_node(KdlNode.create("b"))
         assert [n.name for n in doc.nodes] == ["a", "b"]
         assert doc.nodes[1].document is doc
 
-    def test_insert_node(self):
+    def test_insert_node(self) -> None:
         doc = parse("a\nc")
         doc.insert_node(1, KdlNode.create("b"))
         assert [n.name for n in doc.nodes] == ["a", "b", "c"]
 
-    def test_remove_node(self):
+    def test_remove_node(self) -> None:
         doc = parse("a\nb")
         removed = doc.remove_node(0)
         assert removed.name == "a"
@@ -204,12 +204,12 @@ class TestDocumentMutation:
         ("a\nb", '"""\n    a\n    b\n"""'),
     ],
 )
-def test_value_to_kdl(value, expected):
+def test_value_to_kdl(value: object, expected: str) -> None:
     v = KdlValue.create(value)
     assert v.to_kdl() == expected
 
 
-def test_value_to_kdl_special_floats():
+def test_value_to_kdl_special_floats() -> None:
     assert KdlValue.create(float("inf")).to_kdl() == "#inf"
     assert KdlValue.create(float("-inf")).to_kdl() == "#-inf"
     # NaN cannot be compared via ==; check textual form directly.
@@ -217,12 +217,12 @@ def test_value_to_kdl_special_floats():
     assert nan_text == "#nan"
 
 
-def test_value_keyword_passthrough():
+def test_value_keyword_passthrough() -> None:
     assert KdlValue.keyword("#custom").to_kdl() == "#custom"
     assert KdlValue.keyword("#true").to_kdl() == "#true"
 
 
-def test_value_type_annotation_prefix():
+def test_value_type_annotation_prefix() -> None:
     v = KdlValue.create(123, type_annotation="(u8)")
     assert v.to_kdl() == "(u8) 123"
 
@@ -241,22 +241,22 @@ def test_value_type_annotation_prefix():
         ("a\\b", '"a\\\\b"'),
     ],
 )
-def test_escape_quoted(value, expected):
+def test_escape_quoted(value: str, expected: str) -> None:
     assert KdlValue.create(value).to_kdl() == expected
 
 
-def test_escape_unicode_printable_literal():
+def test_escape_unicode_printable_literal() -> None:
     # Printable non-ASCII stays literal.
     assert KdlValue.create("café").to_kdl() == "café"
     assert KdlValue.create("日本語").to_kdl() == "日本語"
 
 
-def test_escape_surrogate_raises():
+def test_escape_surrogate_raises() -> None:
     with pytest.raises(ValueError, match="surrogate"):
         KdlValue.create("\ud800").to_kdl()
 
 
-def test_serialize_unsupported_type_raises():
+def test_serialize_unsupported_type_raises() -> None:
     v = KdlValue.create(object())
     with pytest.raises(TypeError):
         v.to_kdl()
@@ -268,19 +268,19 @@ def test_serialize_unsupported_type_raises():
 
 
 class TestNodeSerialize:
-    def test_bare_name(self):
+    def test_bare_name(self) -> None:
         n = KdlNode.create("foo")
         assert n.to_kdl() == "foo"
 
-    def test_reserved_name_quoted(self):
+    def test_reserved_name_quoted(self) -> None:
         n = KdlNode.create("true")
         assert n.to_kdl() == '"true"'
 
-    def test_name_with_args(self):
+    def test_name_with_args(self) -> None:
         n = KdlNode.create("foo", args=[KdlValue.create(1), KdlValue.create("x")])
         assert n.to_kdl() == "foo 1 x"
 
-    def test_name_with_properties(self):
+    def test_name_with_properties(self) -> None:
         n = KdlNode.create(
             "foo",
             properties={"count": KdlValue.create(5), "flag": KdlValue.create(True)},
@@ -288,15 +288,15 @@ class TestNodeSerialize:
         # dict preserves insertion order
         assert n.to_kdl() == "foo count=5 flag=#true"
 
-    def test_reserved_property_key_quoted(self):
+    def test_reserved_property_key_quoted(self) -> None:
         n = KdlNode.create("foo", properties={"true": KdlValue.create(1)})
         assert n.to_kdl() == 'foo "true"=1'
 
-    def test_node_type_annotation(self):
+    def test_node_type_annotation(self) -> None:
         n = KdlNode.create("date", type_annotation="(published)")
         assert n.to_kdl() == "(published) date"
 
-    def test_node_type_annotation_with_value_type(self):
+    def test_node_type_annotation_with_value_type(self) -> None:
         n = KdlNode.create(
             "foo",
             args=[KdlValue.create(1, type_annotation="(u8)")],
@@ -304,7 +304,7 @@ class TestNodeSerialize:
         )
         assert n.to_kdl() == "(published) foo (u8) 1"
 
-    def test_children_block(self):
+    def test_children_block(self) -> None:
         n = KdlNode.create(
             "parent",
             children=[
@@ -314,12 +314,12 @@ class TestNodeSerialize:
         )
         assert n.to_kdl() == "parent {\n    a\n    b 1\n}"
 
-    def test_force_children_block_empty(self):
+    def test_force_children_block_empty(self) -> None:
         n = KdlNode.create("empty")
         assert n.to_kdl() == "empty"
         assert n.to_kdl(force_children_block=True) == "empty {}"
 
-    def test_force_children_block_not_propagated(self):
+    def test_force_children_block_not_propagated(self) -> None:
         n = KdlNode.create(
             "p",
             children=[KdlNode.create("c")],
@@ -327,7 +327,7 @@ class TestNodeSerialize:
         out = n.to_kdl(force_children_block=True)
         assert out == "p {\n    c\n}"
 
-    def test_nested_children(self):
+    def test_nested_children(self) -> None:
         n = KdlNode.create(
             "a",
             children=[
@@ -339,7 +339,7 @@ class TestNodeSerialize:
         )
         assert n.to_kdl() == "a {\n    b {\n        c\n    }\n}"
 
-    def test_custom_indent(self):
+    def test_custom_indent(self) -> None:
         n = KdlNode.create("p", children=[KdlNode.create("c")])
         assert n.to_kdl(indent_str="\t") == "p {\n\tc\n}"
 
@@ -350,19 +350,19 @@ class TestNodeSerialize:
 
 
 class TestDocSerialize:
-    def test_single_node(self):
+    def test_single_node(self) -> None:
         doc = parse("a")
         assert doc.to_kdl() == "a\n"
 
-    def test_multiple_nodes(self):
+    def test_multiple_nodes(self) -> None:
         doc = parse("a\nb 1")
         assert doc.to_kdl() == "a\nb 1\n"
 
-    def test_empty_document(self):
+    def test_empty_document(self) -> None:
         doc = parse("")
         assert doc.to_kdl() == ""
 
-    def test_round_trip_preserves_structure(self):
+    def test_round_trip_preserves_structure(self) -> None:
         src = "parent {\n    a 1\n    b key=val\n    nested {\n        c\n    }\n}\n"
         doc = parse(src)
         out = doc.to_kdl()
@@ -381,7 +381,7 @@ class TestDocSerialize:
 
 
 class TestMigrationExample:
-    def test_struct_migration(self):
+    def test_struct_migration(self) -> None:
         doc = parse('struct "old" {}')
         struct = doc.nodes[0]
         struct.insert_child(
