@@ -180,6 +180,19 @@ class _Tok(NamedTuple):
 _SPECIAL = set('()[]{}=^$~*+>:#"\'/,')
 
 
+def _unescape_string(s: str) -> str:
+    parts: list[str] = []
+    i = 0
+    while i < len(s):
+        if s[i] == "\\" and i + 1 < len(s):
+            i += 1
+            parts.append(s[i])
+        else:
+            parts.append(s[i])
+        i += 1
+    return "".join(parts)
+
+
 class SelectorLexer:
     def __init__(self, source: str):
         self._src = source
@@ -275,18 +288,17 @@ class SelectorLexer:
     def _read_string(self, quote: str = '"') -> _Tok:
         start = self._i
         self._i += 1
-        parts: list[str] = []
+        inner_start = self._i
         while self._i < len(self._src) and self._src[self._i] != quote:
             if self._src[self._i] == "\\" and self._i + 1 < len(self._src):
-                self._i += 1
-                parts.append(self._src[self._i])
+                self._i += 2
             else:
-                parts.append(self._src[self._i])
-            self._i += 1
+                self._i += 1
         if self._i >= len(self._src):
             raise SelectorError(f"Unterminated string starting at position {start}")
+        inner = self._src[inner_start : self._i]
         self._i += 1
-        return _Tok(_TokType.STRING, self._src[start : self._i], "".join(parts))
+        return _Tok(_TokType.STRING, self._src[start : self._i], _unescape_string(inner))
 
     def _read_number(self) -> _Tok:
         start = self._i
@@ -300,7 +312,6 @@ class SelectorLexer:
 
     def _read_ident(self) -> _Tok:
         start = self._i
-        parts: list[str] = []
         while self._i < len(self._src):
             ch = self._src[self._i]
             if ch == "\\":
@@ -308,16 +319,13 @@ class SelectorLexer:
                     raise SelectorError(
                         f"Unterminated escape sequence at position {self._i}"
                     )
-                self._i += 1
-                parts.append(self._src[self._i])
-                self._i += 1
+                self._i += 2
             elif ch not in _SPECIAL and not ch.isspace():
-                parts.append(ch)
                 self._i += 1
             else:
                 break
         raw = self._src[start : self._i]
-        return _Tok(_TokType.IDENT, raw, "".join(parts))
+        return _Tok(_TokType.IDENT, raw, _unescape_string(raw))
 
 
 # ---------------------------------------------------------------------------
@@ -610,17 +618,7 @@ def _normalize_type_annotation(ann: str | None) -> str | None:
                 return _decode_quoted(s)
             except ValueError:
                 pass
-        inner = s[1:-1]
-        parts: list[str] = []
-        i = 0
-        while i < len(inner):
-            if inner[i] == "\\" and i + 1 < len(inner):
-                i += 1
-                parts.append(inner[i])
-            else:
-                parts.append(inner[i])
-            i += 1
-        return "".join(parts)
+        return _unescape_string(s[1:-1])
     return s
 
 

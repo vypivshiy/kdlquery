@@ -1,7 +1,6 @@
 import pytest
 
 from kdlquery import KdlDocument, KdlNode, SelectorError, parse
-from kdlquery.selector import SelectorLexer
 
 KDL_TEST_DOC = """\
 /- kdl-version 2
@@ -966,7 +965,7 @@ class TestQuotedNodeSelectors:
         assert _first_args(r2) == ["v3"]
 
     def test_selector_list_with_quotes(self, qdoc: KdlDocument) -> None:
-        # Comma list with quoted selectors
+        # Comma list with string-wrapped node selectors
         r1 = qdoc.select('"a>b", "x~y"')
         assert _first_args(r1) == ["ok", "ok"]
         assert _names(r1) == ["a>b", "x~y"]
@@ -980,7 +979,7 @@ class TestQuotedNodeSelectors:
         assert _first_args(r3) == ["special"]
 
     def test_pseudo_class_not_with_quotes(self, qdoc: KdlDocument) -> None:
-        # :not with quoted selector
+        # :not with string-wrapped node selector
         r1 = qdoc.select('"service:web":not("service:api")')
         assert _first_args(r1) == ["frontend"]
 
@@ -1028,7 +1027,7 @@ class TestQuotedNodeSelectors:
         assert qdoc.select_one("'nonexistent'") is None
 
     def test_public_api_node_select_and_select_one(self, qdoc: KdlDocument) -> None:
-        # KdlNode.select() and KdlNode.select_one() with quoted selectors
+        # KdlNode.select() and KdlNode.select_one() with string-wrapped node selectors
         web = qdoc.select_one('"service:web"')
         assert web is not None
 
@@ -1405,43 +1404,6 @@ class TestEscapedIdentifiersKdlNodeMethods:
         assert item.name == "nested:item"
         assert item.get_arg(0) == 21
         assert node.select_one(r"non\>existent") is None
-
-
-class TestSelectorLexerEscaping:
-    def test_raw_vs_value_unescaping(self) -> None:
-        toks = SelectorLexer(r"a\>b").tokenize()
-        assert toks[0].raw == r"a\>b"
-        assert toks[0].value == "a>b"
-
-    def test_start_escape_raw_vs_value(self) -> None:
-        toks = SelectorLexer(r"\>foo").tokenize()
-        assert toks[0].raw == r"\>foo"
-        assert toks[0].value == ">foo"
-
-    def test_combinator_tokens(self) -> None:
-        toks = SelectorLexer(r"a\>b > c\+d").tokenize()
-        assert [(t.typ.value, t.raw, t.value) for t in toks] == [
-            ("IDENT", r"a\>b", "a>b"),
-            ("GT", ">", None),
-            ("IDENT", r"c\+d", "c+d"),
-            ("EOF", "", None),
-        ]
-
-    def test_various_escaped_characters(self) -> None:
-        for raw_ident, expected_val in [
-            (r"a\+b", "a+b"),
-            (r"a\~b", "a~b"),
-            (r"a\,b", "a,b"),
-            (r"a\:b", "a:b"),
-            (r"a\#b", "a#b"),
-            (r"a\*b", "a*b"),
-            (r"a\=b", "a=b"),
-            (r"a\(b\)", "a(b)"),
-            (r"a\[b\]", "a[b]"),
-        ]:
-            toks = SelectorLexer(raw_ident).tokenize()
-            assert toks[0].raw == raw_ident
-            assert toks[0].value == expected_val
 
 
 # ---------------------------------------------------------------------------
