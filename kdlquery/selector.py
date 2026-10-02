@@ -177,7 +177,7 @@ class _Tok(NamedTuple):
     value: Any
 
 
-_SPECIAL = set('()[]{}=^$~*+>:#"/,')
+_SPECIAL = set('()[]{}=^$~*+>:#"\'/,')
 
 
 class SelectorLexer:
@@ -253,8 +253,8 @@ class SelectorLexer:
             return _Tok(_TokType.TILDE, "~", None)
         if ch == "#":
             return self._read_bool()
-        if ch == '"':
-            return self._read_string()
+        if ch in ('"', "'"):
+            return self._read_string(ch)
         if ch.isdigit():
             return self._read_number()
         if ch not in _SPECIAL and not ch.isspace():
@@ -272,11 +272,11 @@ class SelectorLexer:
             return _Tok(_TokType.BOOL, self._src[start : self._i], False)
         raise SelectorError(f"Invalid token at position {start}: '{self._src[start:]}'")
 
-    def _read_string(self) -> _Tok:
+    def _read_string(self, quote: str = '"') -> _Tok:
         start = self._i
         self._i += 1
         parts: list[str] = []
-        while self._i < len(self._src) and self._src[self._i] != '"':
+        while self._i < len(self._src) and self._src[self._i] != quote:
             if self._src[self._i] == "\\" and self._i + 1 < len(self._src):
                 self._i += 1
                 parts.append(self._src[self._i])
@@ -372,7 +372,7 @@ class SelectorParser:
         if tok.typ == _TokType.TILDE:
             self._advance()
             return Combinator.GENERAL_SIBLING
-        if tok.typ in (_TokType.IDENT, _TokType.STAR, _TokType.LPAREN):
+        if tok.typ in (_TokType.IDENT, _TokType.STAR, _TokType.LPAREN, _TokType.STRING):
             return Combinator.DESCENDANT
         return None
 
@@ -393,7 +393,7 @@ class SelectorParser:
     def _node_selector(self) -> NodeSelector:
         if self._cur().typ == _TokType.LPAREN:
             type_ann = self._type_annotation()
-            if self._cur().typ == _TokType.IDENT:
+            if self._cur().typ in (_TokType.IDENT, _TokType.STRING):
                 name: str | None = self._advance().value
             elif self._cur().typ == _TokType.STAR:
                 self._advance()
@@ -404,7 +404,7 @@ class SelectorParser:
         if self._cur().typ == _TokType.STAR:
             self._advance()
             return NodeSelector(name=None, type_annotation=None)
-        if self._cur().typ == _TokType.IDENT:
+        if self._cur().typ in (_TokType.IDENT, _TokType.STRING):
             name = self._advance().value
             return NodeSelector(name=name, type_annotation=None)
         # Bare filter/pseudo without node selector → implicit wildcard

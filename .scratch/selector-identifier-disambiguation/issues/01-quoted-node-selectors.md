@@ -5,11 +5,11 @@ Enable selecting KDL nodes using double (`"..."`) and single (`'...'`) quoted st
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Both `"name"` and `'name'` match nodes with exact name `name`.
-- [ ] Node names containing combinator characters like `"a>b"`, `'a+b'`, `"a~b"`, `"a,b"` match their corresponding nodes without parser errors or triggering combinators.
-- [ ] Descendant combinators work when either ancestor or descendant node selector is quoted (e.g. `"parent" "child"`, `app "server"`).
-- [ ] Explicit combinators (`>`, `+`, `~`) connect quoted node selectors (e.g. `"a>b" > "c+d"`).
-- [ ] Quoted node selectors work inside `:not(...)` and `:has(...)`.
-- [ ] Unterminated single or double quotes raise an informative `SelectorError`.
+- [x] Both `"name"` and `'name'` match nodes with exact name `name`.
+- [x] Node names containing combinator characters like `"a>b"`, `'a+b'`, `"a~b"`, `"a,b"` match their corresponding nodes without parser errors or triggering combinators.
+- [x] Descendant combinators work when either ancestor or descendant node selector is quoted (e.g. `"parent" "child"`, `app "server"`).
+- [x] Explicit combinators (`>`, `+`, `~`) connect quoted node selectors (e.g. `"a>b" > "c+d"`).
+- [x] Quoted node selectors work inside `:not(...)` and `:has(...)`.
+- [x] Unterminated single or double quotes raise an informative `SelectorError`.

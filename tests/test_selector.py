@@ -1,6 +1,6 @@
 import pytest
 
-from kdlquery import KdlDocument, KdlNode, parse
+from kdlquery import KdlDocument, KdlNode, SelectorError, parse
 
 
 KDL_TEST_DOC = """\
@@ -811,3 +811,331 @@ class TestKdlNodeSelect:
         assert _first_args(r) == ["localhost", "127.0.0.1"]
         # Should not find hosts from other server
         assert "replica.local" not in _first_args(r)
+
+
+# ---------------------------------------------------------------------------
+# Quoted node selectors and descendant combinators (Ticket 01)
+# ---------------------------------------------------------------------------
+
+KDL_QUOTED_SELECTORS_DOC = """\
+/- kdl-version 2
+
+"service:web" "frontend" {
+    "a>b" "ok" status="ok" {
+        "child>item" "v1" {
+            "deep+node" "leaf1"
+        }
+        "child_plain" "v2"
+    }
+    "c+d" "pending" status="pending" {
+        "sub" "v3"
+    }
+    "x~y" "ok" status="ok"
+    "a,b" "special" status="special"
+    "a<b" "angle" status="angle"
+    "spaced name" "val"
+    "has'single" "single_quote"
+    "has\\"double" "double_quote"
+}
+
+"service:api" "backend" {
+    "c+d" "api_cd" status="api_cd"
+    "isolated" "none"
+}
+
+"top>a" "sibling1"
+"top+b" "sibling2"
+"top~c" "sibling3"
+"""
+
+
+@pytest.fixture()
+def qdoc() -> KdlDocument:
+    return parse(KDL_QUOTED_SELECTORS_DOC)
+
+
+class TestQuotedNodeSelectors:
+    def test_double_and_single_quotes_exact_match(self, qdoc: KdlDocument) -> None:
+        # Both "name" and 'name' match nodes with exact name
+        r_double = qdoc.select('"service:web"')
+        r_single = qdoc.select("'service:web'")
+        assert _first_args(r_double) == ["frontend"]
+        assert _first_args(r_single) == ["frontend"]
+
+        r_double_api = qdoc.select('"service:api"')
+        r_single_api = qdoc.select("'service:api'")
+        assert _first_args(r_double_api) == ["backend"]
+        assert _first_args(r_single_api) == ["backend"]
+
+    def test_quoted_simple_node_name(self, doc: KdlDocument) -> None:
+        # Standard unquoted identifiers also match when quoted
+        assert _names(doc.select('"app"')) == ["app"]
+        assert _names(doc.select("'app'")) == ["app"]
+        assert _first_args(doc.select('"server"')) == ["primary", "replica"]
+        assert _first_args(doc.select("'server'")) == ["primary", "replica"]
+
+    def test_special_characters_in_node_names(self, qdoc: KdlDocument) -> None:
+        # Combinator and list characters in node names don't trigger combinators
+        assert _first_args(qdoc.select('"a>b"')) == ["ok"]
+        assert _first_args(qdoc.select("'a>b'")) == ["ok"]
+
+        assert _first_args(qdoc.select('"c+d"')) == ["pending", "api_cd"]
+        assert _first_args(qdoc.select("'c+d'")) == ["pending", "api_cd"]
+
+        assert _first_args(qdoc.select('"x~y"')) == ["ok"]
+        assert _first_args(qdoc.select("'x~y'")) == ["ok"]
+
+        assert _first_args(qdoc.select('"a,b"')) == ["special"]
+        assert _first_args(qdoc.select("'a,b'")) == ["special"]
+
+        assert _first_args(qdoc.select('"a<b"')) == ["angle"]
+        assert _first_args(qdoc.select("'a<b'")) == ["angle"]
+
+        assert _first_args(qdoc.select('"spaced name"')) == ["val"]
+        assert _first_args(qdoc.select("'spaced name'")) == ["val"]
+
+    def test_nested_quotes_in_node_names(self, qdoc: KdlDocument) -> None:
+        # Single quote inside double quotes and double quote inside single quotes
+        assert _first_args(qdoc.select('"has\'single"')) == ["single_quote"]
+        assert _first_args(qdoc.select('\'has"double\'')) == ["double_quote"]
+
+    def test_descendant_combinators_with_quotes(self, qdoc: KdlDocument, doc: KdlDocument) -> None:
+        # Quoted ancestor and quoted descendant
+        r1 = qdoc.select('"service:web" "child>item"')
+        assert _first_args(r1) == ["v1"]
+        r2 = qdoc.select("'service:web' 'child>item'")
+        assert _first_args(r2) == ["v1"]
+
+        # Quoted ancestor and unquoted descendant
+        r3 = qdoc.select('"service:web" sub')
+        assert _first_args(r3) == ["v3"]
+        r4 = qdoc.select('"service:api" isolated')
+        assert _first_args(r4) == ["none"]
+
+        # Unquoted ancestor and quoted descendant
+        r5 = doc.select('app "server"')
+        assert _first_args(r5) == ["primary", "replica"]
+        r6 = doc.select("app 'server'")
+        assert _first_args(r6) == ["primary", "replica"]
+
+        # Deep multi-step descendant chain
+        r7 = qdoc.select('"service:web" "a>b" "deep+node"')
+        assert _first_args(r7) == ["leaf1"]
+
+    def test_child_combinator_with_quotes(self, qdoc: KdlDocument) -> None:
+        # Direct child > with quotes
+        assert _first_args(qdoc.select('"service:web" > "a>b"')) == ["ok"]
+        assert _first_args(qdoc.select("'service:web' > 'a>b'")) == ["ok"]
+        # Without whitespace around >
+        assert _first_args(qdoc.select('"service:web">"a>b"')) == ["ok"]
+
+        # Nested direct child
+        assert _first_args(qdoc.select('"a>b" > "child>item"')) == ["v1"]
+        assert _first_args(qdoc.select('"child>item" > "deep+node"')) == ["leaf1"]
+
+        # Non-direct descendant fails with child combinator
+        assert qdoc.select('"service:web" > "deep+node"') == []
+
+    def test_adjacent_sibling_combinator_with_quotes(self, qdoc: KdlDocument) -> None:
+        # Adjacent sibling +
+        assert _first_args(qdoc.select('"a>b" + "c+d"')) == ["pending"]
+        assert _first_args(qdoc.select("'a>b' + 'c+d'")) == ["pending"]
+        assert _first_args(qdoc.select('"a>b"+"c+d"')) == ["pending"]
+
+        assert _first_args(qdoc.select('"top>a" + "top+b"')) == ["sibling2"]
+
+        # Non-adjacent sibling fails with adjacent combinator
+        assert qdoc.select('"a>b" + "x~y"') == []
+
+    def test_general_sibling_combinator_with_quotes(self, qdoc: KdlDocument) -> None:
+        # General sibling ~
+        assert _first_args(qdoc.select('"a>b" ~ "x~y"')) == ["ok"]
+        assert _first_args(qdoc.select("'a>b' ~ 'x~y'")) == ["ok"]
+        assert _first_args(qdoc.select('"a>b"~"x~y"')) == ["ok"]
+
+        assert _first_args(qdoc.select('"top>a" ~ "top~c"')) == ["sibling3"]
+
+        # Reverse order does not match
+        assert qdoc.select('"x~y" ~ "a>b"') == []
+
+    def test_mixed_combinators_with_quotes(self, qdoc: KdlDocument) -> None:
+        r1 = qdoc.select('"service:web" > "a>b" > "child>item" > "deep+node"')
+        assert _first_args(r1) == ["leaf1"]
+
+        r2 = qdoc.select('"service:web" > "a>b" + "c+d" > sub')
+        assert _first_args(r2) == ["v3"]
+
+    def test_selector_list_with_quotes(self, qdoc: KdlDocument) -> None:
+        # Comma list with quoted selectors
+        r1 = qdoc.select('"a>b", "x~y"')
+        assert _first_args(r1) == ["ok", "ok"]
+        assert _names(r1) == ["a>b", "x~y"]
+
+        r2 = qdoc.select("'top>a', 'top+b'")
+        assert _names(r2) == ["top>a", "top+b"]
+
+        # Comma INSIDE quoted node name matches exact node, not list
+        r3 = qdoc.select('"a,b"')
+        assert _names(r3) == ["a,b"]
+        assert _first_args(r3) == ["special"]
+
+    def test_pseudo_class_not_with_quotes(self, qdoc: KdlDocument) -> None:
+        # :not with quoted selector
+        r1 = qdoc.select('"service:web":not("service:api")')
+        assert _first_args(r1) == ["frontend"]
+
+        r2 = qdoc.select('"service:api":not("service:api")')
+        assert r2 == []
+
+        r3 = qdoc.select('"service:web" > *:not("a>b", "c+d")')
+        assert "a>b" not in _names(r3)
+        assert "c+d" not in _names(r3)
+        assert "x~y" in _names(r3)
+
+    def test_pseudo_class_has_with_quotes(self, qdoc: KdlDocument) -> None:
+        # :has with quoted descendant
+        r1 = qdoc.select('"service:web":has("child>item")')
+        assert _first_args(r1) == ["frontend"]
+        r1_single = qdoc.select("'service:web':has('child>item')")
+        assert _first_args(r1_single) == ["frontend"]
+
+        # :has with explicit child combinator
+        r2 = qdoc.select('"service:web":has(> "a>b")')
+        assert _first_args(r2) == ["frontend"]
+
+        # :has with non-direct child fails when > is used
+        r3 = qdoc.select('"service:web":has(> "child>item")')
+        assert r3 == []
+
+        # :has deep match
+        r4 = qdoc.select('"a>b":has("deep+node")')
+        assert _first_args(r4) == ["ok"]
+
+        # :has non-matching selector
+        assert qdoc.select('"service:web":has("nonexistent")') == []
+
+    def test_public_api_select_one(self, qdoc: KdlDocument) -> None:
+        # KdlDocument.select_one() with double and single quotes
+        node1 = qdoc.select_one('"service:web"')
+        assert node1 is not None
+        assert node1.name == "service:web"
+
+        node2 = qdoc.select_one("'a>b'")
+        assert node2 is not None
+        assert node2.name == "a>b"
+
+        assert qdoc.select_one('"nonexistent"') is None
+        assert qdoc.select_one("'nonexistent'") is None
+
+    def test_public_api_node_select_and_select_one(self, qdoc: KdlDocument) -> None:
+        # KdlNode.select() and KdlNode.select_one() with quoted selectors
+        web = qdoc.select_one('"service:web"')
+        assert web is not None
+
+        # Subtree select
+        r = web.select('"a>b"')
+        assert len(r) == 1
+        assert r[0].name == "a>b"
+
+        # Subtree select with single quote
+        r_single = web.select("'c+d'")
+        assert len(r_single) == 1
+        assert r_single[0].get_arg(0) == "pending"
+
+        # Subtree select_one
+        child = web.select_one('"child>item"')
+        assert child is not None
+        assert child.name == "child>item"
+        assert web.select_one('"nonexistent"') is None
+
+        # Combinators within subtree
+        deep = web.select('"a>b" > "child>item"')
+        assert len(deep) == 1
+        assert deep[0].name == "child>item"
+
+    def test_public_api_node_matches(self, qdoc: KdlDocument) -> None:
+        # KdlNode.matches() with double and single quotes
+        web = qdoc.select_one('"service:web"')
+        assert web is not None
+
+        assert web.matches('"service:web"')
+        assert web.matches("'service:web'")
+        assert not web.matches('"service:api"')
+        assert not web.matches("'service:api'")
+
+        # Matches with pseudo-classes
+        assert web.matches(':not("service:api")')
+        assert not web.matches(':not("service:web")')
+        assert web.matches(':has("child>item")')
+        assert not web.matches(':has("nonexistent")')
+
+        # Child node matching
+        ab = qdoc.select_one('"a>b"')
+        assert ab is not None
+        assert ab.matches('"a>b"')
+        assert ab.matches("'a>b'")
+        assert not ab.matches('"c+d"')
+        assert ab.matches('"service:web" > "a>b"')
+        assert not ab.matches('"service:api" > "a>b"')
+
+    def test_unterminated_quotes_raise_selector_error(self, qdoc: KdlDocument) -> None:
+        web = qdoc.select_one('"service:web"')
+        assert web is not None
+
+        # Unterminated double quotes
+        with pytest.raises(SelectorError, match="Unterminated string"):
+            qdoc.select('"unterminated')
+
+        with pytest.raises(SelectorError, match="Unterminated string"):
+            qdoc.select('parent "unterminated')
+
+        with pytest.raises(SelectorError, match="Unterminated string"):
+            qdoc.select(':not("unterminated)')
+
+        with pytest.raises(SelectorError, match="Unterminated string"):
+            qdoc.select(':has("unterminated)')
+
+        with pytest.raises(SelectorError, match="Unterminated string"):
+            qdoc.select_one('"unterminated')
+
+        with pytest.raises(SelectorError, match="Unterminated string"):
+            web.select('"unterminated')
+
+        with pytest.raises(SelectorError, match="Unterminated string"):
+            web.select_one('"unterminated')
+
+        with pytest.raises(SelectorError, match="Unterminated string"):
+            web.matches('"unterminated')
+
+        # Unterminated single quotes
+        with pytest.raises(SelectorError, match="Unterminated string"):
+            qdoc.select("'unterminated")
+
+        with pytest.raises(SelectorError, match="Unterminated string"):
+            qdoc.select("parent 'unterminated")
+
+        with pytest.raises(SelectorError, match="Unterminated string"):
+            qdoc.select(":not('unterminated)")
+
+        with pytest.raises(SelectorError, match="Unterminated string"):
+            qdoc.select(":has('unterminated)")
+
+        with pytest.raises(SelectorError, match="Unterminated string"):
+            qdoc.select_one("'unterminated")
+
+        with pytest.raises(SelectorError, match="Unterminated string"):
+            web.select("'unterminated")
+
+        with pytest.raises(SelectorError, match="Unterminated string"):
+            web.select_one("'unterminated")
+
+        with pytest.raises(SelectorError, match="Unterminated string"):
+            web.matches("'unterminated")
+
+        # Escaped closing quote resulting in unterminated string
+        with pytest.raises(SelectorError, match="Unterminated string"):
+            qdoc.select('"escaped\\"')
+
+        with pytest.raises(SelectorError, match="Unterminated string"):
+            qdoc.select("'escaped\\'")
+
