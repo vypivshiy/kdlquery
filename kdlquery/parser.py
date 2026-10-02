@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from bisect import bisect_right
 import math
 import re
 from dataclasses import dataclass
@@ -65,6 +66,77 @@ _RESERVED_BARE_IDS: frozenset[str] = frozenset(
     {"true", "false", "null", "inf", "nan", "-inf"}
 )
 
+_NEWLINE_RE = re.compile(r"\r\n|[\n\r\u0085\u000b\u000c\u2028\u2029]")
+_DISALLOWED_RE = re.compile(
+    r"[\x00-\x08\x0e-\x1f\x7f\ud800-\udfff\u200e\u200f\u202a-\u202e\u2066-\u2069]"
+)
+
+
+def _build_line_starts(source: str) -> list[int]:
+    return [0] + [m.end() for m in _NEWLINE_RE.finditer(source)]
+
+
+def _offset_to_position(line_starts: list[int], offset: int) -> Position:
+    line_idx = max(0, bisect_right(line_starts, offset) - 1)
+    line = line_idx + 1
+    col = offset - line_starts[line_idx] + 1
+    return Position(offset=offset, line=line, column=col)
+
+
+def offset_to_position(line_starts: list[int], offset: int) -> Position:
+    return _offset_to_position(line_starts, offset)
+
+
+def _validate_source(source: str, line_starts: list[int]) -> None:
+    m = _DISALLOWED_RE.search(source)
+    has_bom = "\ufeff" in source[1:]
+    bom_offset = source.find("\ufeff", 1) if has_bom else -1
+
+    if bom_offset != -1 and (m is None or bom_offset < m.start()):
+        pos = _offset_to_position(line_starts, bom_offset)
+        raise KDLParseError(
+            "Disallowed literal BOM U+FEFF outside document start",
+            line=pos.line,
+            col=pos.column,
+            code="bom-outside-start",
+        )
+
+    if m is not None:
+        offset = m.start()
+        pos = _offset_to_position(line_starts, offset)
+        cp = ord(source[offset])
+        if 0xD800 <= cp <= 0xDFFF:
+            raise KDLParseError(
+                "Disallowed surrogate code point",
+                line=pos.line,
+                col=pos.column,
+                code="surrogate-codepoint",
+            )
+        if (0x0000 <= cp <= 0x0008) or (0x000E <= cp <= 0x001F) or cp == 0x007F:
+            raise KDLParseError(
+                f"Disallowed control code point U+{cp:04X}",
+                line=pos.line,
+                col=pos.column,
+                code="control-codepoint",
+            )
+        if (
+            (0x200E <= cp <= 0x200F)
+            or (0x202A <= cp <= 0x202E)
+            or (0x2066 <= cp <= 0x2069)
+        ):
+            raise KDLParseError(
+                f"Disallowed direction-control code point U+{cp:04X}",
+                line=pos.line,
+                col=pos.column,
+                code="direction-control-codepoint",
+            )
+        raise KDLParseError(
+            f"Disallowed code point U+{cp:04X}",
+            line=pos.line,
+            col=pos.column,
+            code="control-codepoint",
+        )
+
 
 @dataclass
 class _Cursor:
@@ -72,6 +144,7 @@ class _Cursor:
     i: int = 0
     line: int = 1
     col: int = 1
+    line_starts: list[int] | None = None
 
     def eof(self) -> bool:
         return self.i >= len(self.src)
@@ -91,15 +164,24 @@ class _Cursor:
         return self.src.startswith(s, self.i)
 
     def pos(self) -> Position:
+        if self.line_starts is not None:
+            return _offset_to_position(self.line_starts, self.i)
         return Position(offset=self.i, line=self.line, column=self.col)
 
     def advance(self, n: int = 1) -> str:
-        out = []
+        if self.eof():
+            return ""
+        if self.line_starts is not None:
+            end = min(self.i + n, len(self.src))
+            out = self.src[self.i : end]
+            self.i = end
+            return out
+        out_chars: list[str] = []
         for _ in range(n):
             if self.eof():
                 break
             ch = self.src[self.i]
-            out.append(ch)
+            out_chars.append(ch)
             self.i += 1
             if ch == "\r" and not self.eof() and self.src[self.i] == "\n":
                 pass
@@ -108,13 +190,18 @@ class _Cursor:
                 self.col = 1
             else:
                 self.col += 1
-        return "".join(out)
+        return "".join(out_chars)
 
 
 class KDLLexer:
     def __init__(self, source: str):
-        self.c = _Cursor(source)
+        self._line_starts: list[int] = _build_line_starts(source)
+        _validate_source(source, self._line_starts)
+        self.c = _Cursor(source, line_starts=self._line_starts)
         self._pending_escline: bool = False
+
+    def offset_to_position(self, offset: int) -> Position:
+        return _offset_to_position(self._line_starts, offset)
 
     def tokenize(self) -> list[Token]:
         tokens: list[Token] = []
@@ -126,7 +213,6 @@ class KDLLexer:
             tokens.append(tok)
 
         while not self.c.eof():
-            self._check_disallowed_literal()
             ch = self.c.cur()
 
             if self.c.startswith("\r\n"):
@@ -218,49 +304,7 @@ class KDLLexer:
         return tokens
 
     def _check_disallowed_literal(self) -> None:
-        ch = self.c.cur()
-        cp = ord(ch)
-
-        # U+FEFF only allowed at first code point in document.
-        if cp == 0xFEFF and self.c.i != 0:
-            pos = self.c.pos()
-            raise KDLParseError(
-                "Disallowed literal BOM U+FEFF outside document start",
-                line=pos.line,
-                col=pos.column,
-                code="bom-outside-start",
-            )
-
-        if 0xD800 <= cp <= 0xDFFF:
-            pos = self.c.pos()
-            raise KDLParseError(
-                "Disallowed surrogate code point",
-                line=pos.line,
-                col=pos.column,
-                code="surrogate-codepoint",
-            )
-
-        if (0x0000 <= cp <= 0x0008) or (0x000E <= cp <= 0x001F) or cp == 0x007F:
-            pos = self.c.pos()
-            raise KDLParseError(
-                f"Disallowed control code point U+{cp:04X}",
-                line=pos.line,
-                col=pos.column,
-                code="control-codepoint",
-            )
-
-        if (
-            (0x200E <= cp <= 0x200F)
-            or (0x202A <= cp <= 0x202E)
-            or (0x2066 <= cp <= 0x2069)
-        ):
-            pos = self.c.pos()
-            raise KDLParseError(
-                f"Disallowed direction-control code point U+{cp:04X}",
-                line=pos.line,
-                col=pos.column,
-                code="direction-control-codepoint",
-            )
+        pass
 
     def _single(self, typ: TokenType, n: int = 1) -> Token:
         start = self.c.pos()
@@ -631,7 +675,6 @@ class KDLLexer:
         start = self.c.pos()
         self.c.advance()
         while not self.c.eof() and _is_ident_continue(self.c.cur()):
-            self._check_disallowed_literal()
             self.c.advance()
 
         raw = self.c.src[start.offset : self.c.i]
@@ -1223,4 +1266,7 @@ __all__ = [
     "Span",
     "Token",
     "TokenType",
+    "_build_line_starts",
+    "_offset_to_position",
+    "offset_to_position",
 ]
