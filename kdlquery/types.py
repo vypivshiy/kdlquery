@@ -54,6 +54,11 @@ _PARSE_ERROR_HINTS: dict[str, str] = {
     "expected-identifier": "Expected an identifier at this position.",
     "expected-value": "Expected a value (string / number / bool / null) at this position.",
     "expected-token": "Unexpected token — the parser expected a specific token here.",
+    "escline-comment-continuation": (
+        "Single-line comment '//' cannot follow an escline '\\' across lines "
+        "because it silently terminates the node in KDL. Use block comments '/* ... */', "
+        "or place comments before the node or after its definition."
+    ),
 }
 
 # Public, frozen set of all stable category codes. Useful for self-doc and

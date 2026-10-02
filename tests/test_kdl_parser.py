@@ -375,6 +375,8 @@ class TestParseErrorCodes:
             # expected-eol: two nodes on the same line, the second appears
             # right after a closing children block (no newline between).
             ("x {\n} y", "expected-eol"),
+            # --- escline comment continuation ---
+            ("node \\\n// comment\narg", "escline-comment-continuation"),
         ],
     )
     def test_raises_expected_code(self, src: str, expected_code: str) -> None:
@@ -394,3 +396,45 @@ class TestParseErrorCodes:
         assert exc.value.code == "raw-string/unterminated"
         assert "trailing #" in exc.value.hint
         assert '#"(\\d+)"#' in exc.value.hint
+
+    def test_escline_comment_continuation_detailed(self) -> None:
+        snippet = """
+endpoint name="service" \\
+        target="replica" \\
+        // first explanatory comment
+        // second explanatory comment
+        "https://example.com/api"
+"""
+        with pytest.raises(KDLParseError) as exc:
+            KDL2CSTParser().parse(snippet)
+        assert exc.value.code == "escline-comment-continuation"
+        assert exc.value.line == 4
+        assert "/* ... */" in exc.value.hint
+
+        # Empty lines between escline and comment should also raise
+        with pytest.raises(KDLParseError) as exc2:
+            KDL2CSTParser().parse("node \\\n\n    // comment\n    arg\n")
+        assert exc2.value.code == "escline-comment-continuation"
+
+        # Block comments across continuation are allowed and work as node-space
+        doc_block = KDL2CSTParser().parse(
+            "node \\\n    /* comment */ \\\n    arg\n"
+        )
+        assert len(doc_block.nodes) == 1
+        assert doc_block.nodes[0].name.value == "node"
+        assert len(doc_block.nodes[0].entries) == 1
+
+        doc_block2 = KDL2CSTParser().parse(
+            "node \\\n    /* comment */ arg\n"
+        )
+        assert len(doc_block2.nodes) == 1
+        assert doc_block2.nodes[0].name.value == "node"
+        assert len(doc_block2.nodes[0].entries) == 1
+
+        # Same-line single-line comments remain valid KDL 2.0
+        doc_sameline = KDL2CSTParser().parse(
+            "node \\ // same-line comment\n    arg\n"
+        )
+        assert len(doc_sameline.nodes) == 1
+        assert doc_sameline.nodes[0].name.value == "node"
+        assert len(doc_sameline.nodes[0].entries) == 1

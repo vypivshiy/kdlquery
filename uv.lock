@@ -196,7 +196,7 @@ wheels = [
 
 [[package]]
 name = "kdlquery"
-version = "1.4.1"
+version = "1.4.2"
 source = { editable = "." }
 
 [package.dev-dependencies]

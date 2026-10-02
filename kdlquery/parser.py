@@ -106,19 +106,27 @@ class _Cursor:
 class KDLLexer:
     def __init__(self, source: str):
         self.c = _Cursor(source)
+        self._pending_escline: bool = False
 
     def tokenize(self) -> list[Token]:
         tokens: list[Token] = []
+        self._pending_escline = False
+
+        def emit(tok: Token) -> None:
+            if tok.typ != TokenType.NEWLINE:
+                self._pending_escline = False
+            tokens.append(tok)
+
         while not self.c.eof():
             self._check_disallowed_literal()
             ch = self.c.cur()
 
             if self.c.startswith("\r\n"):
-                tokens.append(self._consume_newline_pair())
+                emit(self._consume_newline_pair())
                 continue
 
             if ch in _NEWLINES:
-                tokens.append(self._consume_newline_single())
+                emit(self._consume_newline_single())
                 continue
 
             if ch in _UNICODE_SPACES:
@@ -130,6 +138,16 @@ class KDLLexer:
                     continue
 
             if self.c.startswith("//"):
+                if self._pending_escline:
+                    pos = self.c.pos()
+                    raise KDLParseError(
+                        "Single-line comment '//' cannot follow an escline '\\' across lines "
+                        "because it silently terminates the node in KDL. Use block comments '/* ... */', "
+                        "or place comments before the node or after its definition.",
+                        line=pos.line,
+                        col=pos.column,
+                        code="escline-comment-continuation",
+                    )
                 self._consume_line_comment()
                 continue
 
@@ -138,45 +156,45 @@ class KDLLexer:
                 continue
 
             if self.c.startswith("/-"):
-                tokens.append(self._single(TokenType.SLASHDASH, 2))
+                emit(self._single(TokenType.SLASHDASH, 2))
                 continue
 
             if ch == "{":
-                tokens.append(self._single(TokenType.LBRACE))
+                emit(self._single(TokenType.LBRACE))
                 continue
             if ch == "}":
-                tokens.append(self._single(TokenType.RBRACE))
+                emit(self._single(TokenType.RBRACE))
                 continue
             if ch == "(":
-                tokens.append(self._single(TokenType.LPAREN))
+                emit(self._single(TokenType.LPAREN))
                 continue
             if ch == ")":
-                tokens.append(self._single(TokenType.RPAREN))
+                emit(self._single(TokenType.RPAREN))
                 continue
             if ch == "=":
-                tokens.append(self._single(TokenType.EQUAL))
+                emit(self._single(TokenType.EQUAL))
                 continue
             if ch == ";":
-                tokens.append(self._single(TokenType.SEMI))
+                emit(self._single(TokenType.SEMI))
                 continue
 
             if ch == '"':
-                tokens.append(self._read_quoted_or_multiline_string())
+                emit(self._read_quoted_or_multiline_string())
                 continue
 
             if ch == "#":
                 tok = self._read_hash_prefixed()
                 if tok is not None:
-                    tokens.append(tok)
+                    emit(tok)
                     continue
 
             tok = self._try_read_number()
             if tok is not None:
-                tokens.append(tok)
+                emit(tok)
                 continue
 
             if self._can_start_ident(ch):
-                tokens.append(self._read_identifier())
+                emit(self._read_identifier())
                 continue
 
             pos = self.c.pos()
@@ -188,7 +206,7 @@ class KDLLexer:
             )
 
         eof = self.c.pos()
-        tokens.append(Token(TokenType.EOF, "", None, Span(eof, eof)))
+        emit(Token(TokenType.EOF, "", None, Span(eof, eof)))
         return tokens
 
     def _check_disallowed_literal(self) -> None:
@@ -264,14 +282,17 @@ class KDLLexer:
             self._consume_line_comment()
 
         if self.c.eof():
+            self._pending_escline = False
             return True
 
         if self.c.startswith("\r\n"):
             self.c.advance(2)
+            self._pending_escline = True
             return True
 
         if self.c.cur() in _NEWLINES:
             self.c.advance()
+            self._pending_escline = True
             return True
 
         # Not an escline, revert.
