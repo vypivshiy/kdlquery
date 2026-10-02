@@ -584,11 +584,6 @@ class SelectorParser:
         if self._cur().typ == _TokType.PLUS:
             self._advance()
             return int(self._expect(_TokType.NUMBER).value)
-        if self._cur().typ == _TokType.TILDE:
-            # '-' is not a token type, lexer doesn't produce negative numbers as minus+number
-            # but '~' could be misinterpreted. Actually '-' would be IDENT or part of NUMBER.
-            # Let's handle the minus sign.
-            pass
         if self._cur().typ == _TokType.IDENT and self._cur().raw.startswith("-"):
             raw = self._advance().raw
             return int(raw)
@@ -823,7 +818,7 @@ class SelectorMatcher:
         if initial == Combinator.CHILD:
             candidates: Iterator[KdlNode] = iter(node.children)
         else:
-            candidates = self._iter_subtree(node)
+            candidates = node.iter_descendants()
 
         if not sel.combinators:
             return any(self._matches_compound(c, sel.compounds[0]) for c in candidates)
@@ -842,12 +837,6 @@ class SelectorMatcher:
             if matched:
                 return True
         return False
-
-    @staticmethod
-    def _iter_subtree(node: KdlNode) -> Iterator[KdlNode]:
-        for child in node.children:
-            yield child
-            yield from SelectorMatcher._iter_subtree(child)
 
     @staticmethod
     def _matches_nth_1based(pos: int, nth: NthExpr) -> bool:

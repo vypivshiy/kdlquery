@@ -24,50 +24,18 @@ from __future__ import annotations
 import math
 from typing import TYPE_CHECKING
 
+from .parser import (
+    _DISALLOWED_IDENT_CHARS,
+    _NEWLINES,
+    _RESERVED_BARE_IDS,
+    _UNICODE_SPACES,
+)
 from .reader import KdlValue, _Keyword
 
 if TYPE_CHECKING:
     from .document import KdlDocument
     from .reader import KdlNode
 
-
-# Characters disallowed anywhere in a bare identifier (KDL 2.0 §3.10.2).
-_DISALLOWED_IDENT_CHARS: frozenset[str] = frozenset('\\/(){};[]"=#')
-
-# Bare identifiers reserved by KDL 2.0 (must be quoted or # prefixed).
-_RESERVED_BARE_IDS: frozenset[str] = frozenset(
-    {"true", "false", "null", "inf", "-inf", "nan"}
-)
-
-# Unicode whitespace (KDL 2.0 §3.17) excluding newlines.
-_UNICODE_SPACES: frozenset[str] = frozenset(
-    (
-        "\u0009",
-        "\u0020",
-        "\u00a0",
-        "\u1680",
-        "\u2000",
-        "\u2001",
-        "\u2002",
-        "\u2003",
-        "\u2004",
-        "\u2005",
-        "\u2006",
-        "\u2007",
-        "\u2008",
-        "\u2009",
-        "\u200a",
-        "\u202f",
-        "\u205f",
-        "\u3000",
-    )
-)
-
-# Newline sequences (KDL 2.0 §3.18). CRLF is treated as a single newline but
-# for serialization purposes we only need the individual code points.
-_NEWLINES: frozenset[str] = frozenset(
-    ("\r", "\n", "\u0085", "\u000b", "\u000c", "\u2028", "\u2029")
-)
 
 # Simple (single-character) escapes for quoted strings (KDL 2.0 §3.11.1).
 _SIMPLE_ESCAPES: dict[str, str] = {
@@ -224,18 +192,13 @@ def _serialize_string_body(s: str, depth: int, indent_str: str) -> str:
     return _escape_quoted(s)
 
 
-def _serialize_number(value: float | int) -> str:
-    """Render a Python int/float as a KDL number literal."""
-    if isinstance(value, bool):
-        # Already excluded by caller, but guard against regressions.
-        raise TypeError("bool must be handled before number serialization")
-    if isinstance(value, float):
-        if math.isnan(value):
-            return "#nan"
-        if math.isinf(value):
-            return "#inf" if value > 0 else "#-inf"
-        return repr(value)
-    return str(value)
+def _serialize_float(value: float) -> str:
+    """Render a Python float as a KDL number literal."""
+    if math.isnan(value):
+        return "#nan"
+    if math.isinf(value):
+        return "#inf" if value > 0 else "#-inf"
+    return repr(value)
 
 
 def _serialize_raw_value(
@@ -255,7 +218,7 @@ def _serialize_raw_value(
     if isinstance(value, int):
         return str(value)
     if isinstance(value, float):
-        return _serialize_number(value)
+        return _serialize_float(value)
     if isinstance(value, str):
         return _serialize_string_body(value, depth, indent_str)
     if isinstance(value, _Keyword):

@@ -193,14 +193,6 @@ class _Keyword:
 
     raw: str
 
-    def __eq__(self, other: object) -> bool:
-        if isinstance(other, _Keyword):
-            return self.raw == other.raw
-        return NotImplemented
-
-    def __hash__(self) -> int:
-        return hash(("_Keyword", self.raw))
-
 
 # ---------------------------------------------------------------------------
 # KdlValue
@@ -830,7 +822,6 @@ class WalkContext(Generic[T_node]):
     index: int
     depth: int
     _walker: Walker[T_node]
-    _processed: list[T_node] = field(default_factory=list)
     _collector: DiagnosticCollector = field(default_factory=DiagnosticCollector)
 
     def error(
@@ -1063,7 +1054,6 @@ class Walker(Generic[T_node]):
             index=index,
             depth=depth,
             _walker=self,
-            _processed=_processed,
             _collector=_collector,
         )
 

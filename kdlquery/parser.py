@@ -30,34 +30,40 @@ _BIN_RE = re.compile(r"[+-]?0b[01][01_]*")
 
 
 # KDL newline set (CRLF treated as single newline)
-_NEWLINES = {"\n", "\r", "\u0085", "\u000b", "\u000c", "\u2028", "\u2029"}
+_NEWLINES: frozenset[str] = frozenset(
+    {"\n", "\r", "\u0085", "\u000b", "\u000c", "\u2028", "\u2029"}
+)
 
 # KDL unicode-space (excluding newlines)
-_UNICODE_SPACES = {
-    "\u0009",
-    "\u0020",
-    "\u00a0",
-    "\u1680",
-    "\u2000",
-    "\u2001",
-    "\u2002",
-    "\u2003",
-    "\u2004",
-    "\u2005",
-    "\u2006",
-    "\u2007",
-    "\u2008",
-    "\u2009",
-    "\u200a",
-    "\u202f",
-    "\u205f",
-    "\u3000",
-}
+_UNICODE_SPACES: frozenset[str] = frozenset(
+    {
+        "\u0009",
+        "\u0020",
+        "\u00a0",
+        "\u1680",
+        "\u2000",
+        "\u2001",
+        "\u2002",
+        "\u2003",
+        "\u2004",
+        "\u2005",
+        "\u2006",
+        "\u2007",
+        "\u2008",
+        "\u2009",
+        "\u200a",
+        "\u202f",
+        "\u205f",
+        "\u3000",
+    }
+)
 
-_DISALLOWED_IDENT_CHARS = set('\\/(){};[]"=#')
+_DISALLOWED_IDENT_CHARS: frozenset[str] = frozenset('\\/(){};[]"=#')
 
 # Bare identifiers that are reserved in KDL2 (must use # prefix or quotes)
-_RESERVED_BARE_IDS = {"true", "false", "null", "inf", "nan", "-inf"}
+_RESERVED_BARE_IDS: frozenset[str] = frozenset(
+    {"true", "false", "null", "inf", "nan", "-inf"}
+)
 
 
 @dataclass
@@ -95,7 +101,9 @@ class _Cursor:
             ch = self.src[self.i]
             out.append(ch)
             self.i += 1
-            if ch in _NEWLINES:
+            if ch == "\r" and not self.eof() and self.src[self.i] == "\n":
+                pass
+            elif ch in _NEWLINES:
                 self.line += 1
                 self.col = 1
             else:
@@ -416,14 +424,6 @@ class KDLLexer:
                 else:
                     self.c.advance()  # consume the single escaped char
                 continue
-            if self.c.startswith("\r\n"):
-                pos = self.c.pos()
-                raise KDLParseError(
-                    "Newline in quoted string",
-                    line=pos.line,
-                    col=pos.column,
-                    code="quoted-string/newline",
-                )
             if ch in _NEWLINES:
                 pos = self.c.pos()
                 raise KDLParseError(
@@ -695,12 +695,8 @@ class _Parser:
             return
 
         if allow_node:
-            save = self.i
-            try:
-                self._parse_node()
-                return
-            except Exception:
-                self.i = save
+            self._parse_node()
+            return
 
         # property or argument
         self._parse_entry()
@@ -982,23 +978,19 @@ def _parse_int_like(raw: str, base: int) -> int:
     return sign * int(s.replace("_", ""), base)
 
 
-def _decode_quoted(raw: str) -> str:
-    """Decode a quoted string. Raises ValueError for invalid escape sequences."""
-    body = raw[1:-1]
+def _decode_escape_body(body: str) -> str:
+    """Decode KDL2 escape sequences in an already-stripped string body."""
     out: list[str] = []
     i = 0
-
     while i < len(body):
         ch = body[i]
         if ch != "\\":
             out.append(ch)
             i += 1
             continue
-
         i += 1
         if i >= len(body):
             raise ValueError("Unterminated escape sequence at end of string")
-
         esc = body[i]
         if esc == "n":
             out.append("\n")
@@ -1048,6 +1040,11 @@ def _decode_quoted(raw: str) -> str:
         i += 1
 
     return "".join(out)
+
+
+def _decode_quoted(raw: str) -> str:
+    """Decode a quoted string. Raises ValueError for invalid escape sequences."""
+    return _decode_escape_body(raw[1:-1])
 
 
 def _count_trailing_backslashes(s: str) -> int:
@@ -1189,69 +1186,6 @@ def _decode_multiline(content: str, *, is_raw: bool = False) -> str:
         result = _decode_escape_body(result)
 
     return result
-
-
-def _decode_escape_body(body: str) -> str:
-    """Decode KDL2 escape sequences in an already-stripped string body."""
-    out: list[str] = []
-    i = 0
-    while i < len(body):
-        ch = body[i]
-        if ch != "\\":
-            out.append(ch)
-            i += 1
-            continue
-        i += 1
-        if i >= len(body):
-            raise ValueError("Unterminated escape sequence at end of string")
-        esc = body[i]
-        if esc == "n":
-            out.append("\n")
-        elif esc == "r":
-            out.append("\r")
-        elif esc == "t":
-            out.append("\t")
-        elif esc == "b":
-            out.append("\b")
-        elif esc == "f":
-            out.append("\f")
-        elif esc == "\\":
-            out.append("\\")
-        elif esc == '"':
-            out.append('"')
-        elif esc == "u" and i + 1 < len(body) and body[i + 1] == "{":
-            end = body.find("}", i + 2)
-            if end == -1:
-                raise ValueError("Unterminated \\u{} escape sequence")
-            hex_part = body[i + 2 : end]
-            if not (1 <= len(hex_part) <= 6) or not all(
-                c in "0123456789abcdefABCDEF" for c in hex_part
-            ):
-                raise ValueError(f"Invalid \\u{{}} escape: \\u{{{hex_part}}}")
-            cp = int(hex_part, 16)
-            if 0xD800 <= cp <= 0xDFFF:
-                raise ValueError(
-                    f"Surrogate code point U+{cp:04X} is not a valid Unicode scalar value"
-                )
-            if cp > 0x10FFFF:
-                raise ValueError(
-                    f"Code point U+{cp:X} exceeds maximum Unicode scalar value U+10FFFF"
-                )
-            out.append(chr(cp))
-            i = end
-        elif esc == "s":
-            out.append(" ")
-        elif esc in _UNICODE_SPACES or esc in _NEWLINES:
-            # Whitespace escape: consume \ and all following whitespace/newlines.
-            while i < len(body) and (
-                body[i] in _UNICODE_SPACES or body[i] in _NEWLINES
-            ):
-                i += 1
-            continue
-        else:
-            raise ValueError(f"Invalid escape sequence: \\{esc}")
-        i += 1
-    return "".join(out)
 
 
 def _is_ident_continue(ch: str) -> bool:
