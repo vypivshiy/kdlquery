@@ -15,7 +15,7 @@ from .types import (
     TokenType,
 )
 from .builder import AstBuilder, CstBuilder, TreeBuilder
-from .parser import KDL2CSTParser, KDLLexer, _Parser
+from .parser import KDL2CSTParser, KDLLexer, _Parser, offset_to_position
 from .reader import (
     DiagnosticCollector,
     KdlValue,
@@ -48,9 +48,12 @@ def parse(source: str) -> KdlDocument:
     Raises:
         KDLParseError: If the source is not valid KDL 2.0.
     """
-    tokens = KDLLexer(source).tokenize()
+    lexer = KDLLexer(source)
+    tokens = lexer.tokenize_raw()
     builder = AstBuilder()
-    p = _Parser(tokens, source=source, builder=builder)
+    p = _Parser(
+        tokens, source=source, builder=builder, line_starts=lexer._line_starts
+    )
     return p.parse_document()
 
 
@@ -83,6 +86,7 @@ __all__ = [
     "Severity",
     "WalkContext",
     "Walker",
+    "offset_to_position",
     "parse_into",
     "parse",
     "SelectorError",

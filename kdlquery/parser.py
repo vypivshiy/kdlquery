@@ -441,8 +441,16 @@ class RawToken(NamedTuple):
     typ: TokenType
     raw: str
     value: Any
-    start: int
-    end: int
+    start_offset: int
+    end_offset: int
+
+    @property
+    def start(self) -> int:
+        return self.start_offset
+
+    @property
+    def end(self) -> int:
+        return self.end_offset
 
 
 class KDLLexer:
@@ -888,51 +896,111 @@ class KDLLexer:
 
 class KDL2CSTParser:
     def parse(self, source: str) -> CSTDocument:
-        tokens = KDLLexer(source).tokenize()
+        lexer = KDLLexer(source)
+        tokens = lexer.tokenize_raw()
         builder = CstBuilder()
-        p = _Parser(tokens, source=source, builder=builder)
+        p = _Parser(
+            tokens, source=source, builder=builder, line_starts=lexer._line_starts
+        )
         return p.parse_document()
 
 
 T = TypeVar("T")
 
 
+class ParsedIdentifier(NamedTuple):
+    value: str
+    raw: str
+    span: Span
+
+
+class ParsedType(NamedTuple):
+    raw: str
+    span: Span
+
+
+class ParsedValue(NamedTuple):
+    value: Any
+    raw: str
+    span: Span
+    type_annotation: ParsedType | None
+    is_bare_ident: bool
+
+
 class _Parser(Generic[T]):
     @overload
     def __init__(
         self: _Parser[CSTDocument],
-        tokens: list[Token],
+        tokens: list[RawToken] | list[Token],
         source: str | None = None,
         builder: None = None,
+        line_starts: list[int] | None = None,
     ) -> None: ...
 
     @overload
     def __init__(
         self: _Parser[T],
-        tokens: list[Token],
+        tokens: list[RawToken] | list[Token],
         source: str | None = None,
         builder: TreeBuilder[T] = ...,
+        line_starts: list[int] | None = None,
     ) -> None: ...
 
     def __init__(
         self,
-        tokens: list[Token],
+        tokens: list[RawToken] | list[Token],
         source: str | None = None,
         builder: TreeBuilder[Any] | None = None,
+        line_starts: list[int] | None = None,
     ):
-        self.tokens = tokens
         self.source = source
         self.i = 0
         if builder is None:
             self.builder: TreeBuilder[Any] = CstBuilder()
-            self._is_cst_builder = True
         else:
             self.builder = builder
-            self._is_cst_builder = isinstance(builder, CstBuilder)
+
+        self._offset_map: dict[int, Position] | None = None
+        if tokens and isinstance(tokens[0], Token):
+            adapted_tokens: list[RawToken] = []
+            offset_map: dict[int, Position] = {}
+            for t in tokens:  # type: ignore[union-attr]
+                adapted_tokens.append(
+                    RawToken(
+                        t.typ,
+                        t.raw,
+                        t.value,
+                        t.span.start.offset,
+                        t.span.end.offset,
+                    )
+                )
+                offset_map[t.span.start.offset] = t.span.start
+                offset_map[t.span.end.offset] = t.span.end
+            self.tokens: list[RawToken] = adapted_tokens
+            self._offset_map = offset_map
+        else:
+            self.tokens = tokens  # type: ignore[assignment]
+
+        if line_starts is not None:
+            self._line_starts: list[int] | None = line_starts
+        elif source is not None:
+            self._line_starts = _build_line_starts(source)
+        else:
+            self._line_starts = None
+
+    def _pos(self, offset: int) -> Position:
+        if self._line_starts is not None:
+            return offset_to_position(self._line_starts, offset)
+        if self._offset_map is not None and offset in self._offset_map:
+            return self._offset_map[offset]
+        return Position(offset=offset, line=1, column=offset + 1)
+
+    def _span(self, start_offset: int, end_offset: int) -> Span:
+        return Span(self._pos(start_offset), self._pos(end_offset))
 
     def parse_document(self) -> T:
         self._skip_separators()
-        start = self._peek().span.start
+        start_pos = self._pos(self._peek().start_offset)
 
         while not self._at(TokenType.EOF):
             if self._match(TokenType.SLASHDASH):
@@ -956,8 +1024,8 @@ class _Parser(Generic[T]):
                 )
             self._skip_separators()
 
-        end = self._peek().span.end
-        res = self.builder.finish_document(Span(start, end))
+        end_pos = self._pos(self._peek().end_offset)
+        res = self.builder.finish_document(Span(start_pos, end_pos))
         return res  # type: ignore[no-any-return]
 
     def _parse_discarded_component(self, *, allow_node: bool) -> None:
@@ -968,9 +1036,7 @@ class _Parser(Generic[T]):
             return
 
         saved_builder = self.builder
-        saved_is_cst = self._is_cst_builder
         self.builder = _NULL_BUILDER
-        self._is_cst_builder = False
         try:
             if allow_node:
                 self._parse_node()
@@ -978,7 +1044,6 @@ class _Parser(Generic[T]):
                 self._parse_entry()
         finally:
             self.builder = saved_builder
-            self._is_cst_builder = saved_is_cst
 
     def _discard_children_block(self) -> None:
         self._expect(TokenType.LBRACE)
@@ -986,10 +1051,11 @@ class _Parser(Generic[T]):
         while depth > 0:
             tok = self._peek()
             if tok.typ == TokenType.EOF:
+                pos = self._pos(tok.start_offset)
                 raise KDLParseError(
                     "Unterminated children block",
-                    line=tok.span.start.line,
-                    col=tok.span.start.column,
+                    line=pos.line,
+                    col=pos.column,
                     code="children-block/unterminated",
                 )
             if tok.typ == TokenType.LBRACE:
@@ -1007,25 +1073,18 @@ class _Parser(Generic[T]):
             name.span.end,
         )
 
-        if self._is_cst_builder:
-            self.builder.start_node(
-                name.value,
-                node_type.raw if node_type else None,
-                start_span,
-                name_raw=name.raw,
-                name_span=name.span,
-                type_span=node_type.span if node_type else None,
-            )
-        else:
-            self.builder.start_node(
-                name.value,
-                node_type.raw if node_type else None,
-                start_span,
-            )
+        self.builder.start_node(
+            name.value,
+            node_type.raw if node_type else None,
+            start_span,
+            name_raw=name.raw,
+            name_span=name.span,
+            type_span=node_type.span if node_type else None,
+        )
 
         has_children_block = False
 
-        # Zero-space: track end offset of last significant token before each entry
+        # Node Space: track end offset of last significant token before each entry
         prev_end = name.span.end.offset
 
         while not self._is_node_terminator() and not self._at(TokenType.LBRACE):
@@ -1040,9 +1099,9 @@ class _Parser(Generic[T]):
                 self._parse_discarded_component(allow_node=False)
                 # Do NOT skip separators here: leave newlines to terminate the node
                 continue
-            # Require whitespace before each entry
+            # Require Node Space before each entry
             next_tok = self._peek()
-            if next_tok.span.start.offset == prev_end:
+            if next_tok.start_offset == prev_end:
                 raise self._error_tok(
                     next_tok,
                     "Expected whitespace before entry",
@@ -1072,7 +1131,8 @@ class _Parser(Generic[T]):
                 )
             has_children_block = True
             lbrace = self._prev()
-            self.builder.start_children(lbrace.span)
+            lbrace_span = self._span(lbrace.start_offset, lbrace.end_offset)
+            self.builder.start_children(lbrace_span)
 
             self._skip_separators()
             while not self._at(TokenType.RBRACE):
@@ -1091,12 +1151,12 @@ class _Parser(Generic[T]):
                 self._consume_terminators()
                 self._skip_separators()
             rbrace = self._expect(TokenType.RBRACE)
-            children_block_span = Span(lbrace.span.start, rbrace.span.end)
+            children_block_span = Span(lbrace_span.start, self._pos(rbrace.end_offset))
             self.builder.end_children(children_block_span)
 
-        end = self._prev().span.end if self.i > 0 else name.span.end
+        end_pos = self._pos(self._prev().end_offset) if self.i > 0 else name.span.end
         node_span = Span(
-            (node_type.span.start if node_type else name.span.start), end
+            (node_type.span.start if node_type else name.span.start), end_pos
         )
         self.builder.end_node(node_span)
 
@@ -1108,50 +1168,35 @@ class _Parser(Generic[T]):
         ):
             key = self._parse_identifier_like()
             self._expect(TokenType.EQUAL)
-            val, raw, val_span, ty, is_bare = self._parse_value_like_info()
-            entry_span = Span(key.span.start, val_span.end)
-            if self._is_cst_builder:
-                self.builder.add_prop(
-                    key.value,
-                    val,
-                    ty.raw if ty else None,
-                    entry_span,
-                    key_raw=key.raw,
-                    key_span=key.span,
-                    val_raw=raw,
-                    val_span=val_span,
-                    type_span=ty.span if ty else None,
-                    is_bare_ident=is_bare,
-                )
-            else:
-                self.builder.add_prop(
-                    key.value,
-                    val,
-                    ty.raw if ty else None,
-                    entry_span,
-                )
+            parsed_val = self._parse_value_like_info()
+            entry_span = Span(key.span.start, parsed_val.span.end)
+            self.builder.add_prop(
+                key.value,
+                parsed_val.value,
+                parsed_val.type_annotation.raw if parsed_val.type_annotation else None,
+                entry_span,
+                key_raw=key.raw,
+                key_span=key.span,
+                value_raw=parsed_val.raw,
+                value_span=parsed_val.span,
+                type_span=parsed_val.type_annotation.span if parsed_val.type_annotation else None,
+                is_bare_ident=parsed_val.is_bare_ident,
+            )
             return entry_span
 
-        val, raw, val_span, ty, is_bare = self._parse_value_like_info()
-        if self._is_cst_builder:
-            self.builder.add_arg(
-                val,
-                ty.raw if ty else None,
-                val_span,
-                raw=raw,
-                val_span=val_span,
-                type_span=ty.span if ty else None,
-                is_bare_ident=is_bare,
-            )
-        else:
-            self.builder.add_arg(
-                val,
-                ty.raw if ty else None,
-                val_span,
-            )
-        return val_span
+        parsed_val = self._parse_value_like_info()
+        self.builder.add_arg(
+            parsed_val.value,
+            parsed_val.type_annotation.raw if parsed_val.type_annotation else None,
+            parsed_val.span,
+            raw=parsed_val.raw,
+            value_span=parsed_val.span,
+            type_span=parsed_val.type_annotation.span if parsed_val.type_annotation else None,
+            is_bare_ident=parsed_val.is_bare_ident,
+        )
+        return parsed_val.span
 
-    def _try_parse_type_annotation(self) -> CSTTypeAnnotation | None:
+    def _try_parse_type_annotation(self) -> ParsedType | None:
         if not self._match(TokenType.LPAREN):
             return None
 
@@ -1159,21 +1204,26 @@ class _Parser(Generic[T]):
         self._parse_identifier_like()
         rparen = self._expect(TokenType.RPAREN)
 
-        raw = self._slice(lparen.span.start.offset, rparen.span.end.offset)
-        return CSTTypeAnnotation(raw=raw, span=Span(lparen.span.start, rparen.span.end))
+        raw = self._slice(lparen.start_offset, rparen.end_offset)
+        return ParsedType(
+            raw=raw,
+            span=self._span(lparen.start_offset, rparen.end_offset),
+        )
 
-    def _parse_identifier_like(self) -> CSTIdentifier:
+    def _parse_identifier_like(self) -> ParsedIdentifier:
         tok = self._peek()
         if not self._is_identifier_token(tok):
             raise self._error_tok(
                 tok, f"Expected identifier, got {tok.typ}", code="expected-identifier"
             )
         self._advance()
-        return CSTIdentifier(value=str(tok.value), raw=tok.raw, span=tok.span)
+        return ParsedIdentifier(
+            value=str(tok.value),
+            raw=tok.raw,
+            span=self._span(tok.start_offset, tok.end_offset),
+        )
 
-    def _parse_value_like_info(
-        self,
-    ) -> tuple[Any, str, Span, CSTTypeAnnotation | None, bool]:
+    def _parse_value_like_info(self) -> ParsedValue:
         ty = self._try_parse_type_annotation()
         tok = self._peek()
 
@@ -1186,31 +1236,44 @@ class _Parser(Generic[T]):
         ):
             self._advance()
             if ty:
-                raw = self._slice(ty.span.start.offset, tok.span.end.offset)
-                start = ty.span.start
+                raw = self._slice(ty.span.start.offset, tok.end_offset)
+                start_pos = ty.span.start
             else:
                 raw = tok.raw
-                start = tok.span.start
-            val_span = Span(start, tok.span.end)
-            return tok.value, raw, val_span, ty, False
+                start_pos = self._pos(tok.start_offset)
+            val_span = Span(start_pos, self._pos(tok.end_offset))
+            return ParsedValue(
+                value=tok.value,
+                raw=raw,
+                span=val_span,
+                type_annotation=ty,
+                is_bare_ident=False,
+            )
 
         if tok.typ == TokenType.IDENT:
             self._advance()
             if ty:
-                raw = self._slice(ty.span.start.offset, tok.span.end.offset)
-                val_span = Span(ty.span.start, tok.span.end)
-                return str(tok.value), raw, val_span, ty, False
-            return str(tok.value), tok.raw, tok.span, None, True
+                raw = self._slice(ty.span.start.offset, tok.end_offset)
+                val_span = Span(ty.span.start, self._pos(tok.end_offset))
+                return ParsedValue(
+                    value=str(tok.value),
+                    raw=raw,
+                    span=val_span,
+                    type_annotation=ty,
+                    is_bare_ident=False,
+                )
+            tok_span = self._span(tok.start_offset, tok.end_offset)
+            return ParsedValue(
+                value=str(tok.value),
+                raw=tok.raw,
+                span=tok_span,
+                type_annotation=None,
+                is_bare_ident=True,
+            )
 
         raise self._error_tok(
             tok, f"Expected value, got {tok.typ}", code="expected-value"
         )
-
-    def _parse_value_like(self) -> CSTValue | CSTIdentifier:
-        val, raw, span, ty, is_bare = self._parse_value_like_info()
-        if is_bare:
-            return CSTIdentifier(value=str(val), raw=raw, span=span)
-        return CSTValue(value=val, raw=raw, span=span, type_annotation=ty)
 
     def _is_node_terminator(self) -> bool:
         return (
@@ -1230,18 +1293,18 @@ class _Parser(Generic[T]):
         while self._at(TokenType.NEWLINE) or self._at(TokenType.SEMI):
             self._advance()
 
-    def _is_identifier_token(self, tok: Token) -> bool:
+    def _is_identifier_token(self, tok: RawToken) -> bool:
         return tok.typ in (TokenType.IDENT, TokenType.STRING)
 
     def _slice(self, start: int, end: int) -> str:
         if self.source is not None:
             return self.source[start:end]
-        # reconstruct from token raws for stable representation
         out: list[str] = []
-        for t in self.tokens:
-            if t.span.end.offset <= start:
+        for idx in range(max(0, self.i - 10), min(len(self.tokens), self.i + 10)):
+            t = self.tokens[idx]
+            if t.end_offset <= start:
                 continue
-            if t.span.start.offset >= end:
+            if t.start_offset >= end:
                 break
             out.append(t.raw)
         return "".join(out)
@@ -1255,7 +1318,7 @@ class _Parser(Generic[T]):
             return True
         return False
 
-    def _expect(self, typ: TokenType) -> Token:
+    def _expect(self, typ: TokenType) -> RawToken:
         tok = self._peek()
         if tok.typ != typ:
             raise self._error_tok(
@@ -1263,27 +1326,30 @@ class _Parser(Generic[T]):
             )
         return self._advance()
 
-    def _advance(self) -> Token:
+    def _advance(self) -> RawToken:
         tok = self.tokens[self.i]
         self.i += 1
         return tok
 
-    def _peek(self, n: int = 0) -> Token:
+    def _peek(self, n: int = 0) -> RawToken:
+        if not self.tokens:
+            return RawToken(TokenType.EOF, "", None, 0, 0)
         idx = self.i + n
         if idx >= len(self.tokens):
             return self.tokens[-1]
         return self.tokens[idx]
 
-    def _prev(self) -> Token:
-        if self.i == 0:
-            return self.tokens[0]
+    def _prev(self) -> RawToken:
+        if not self.tokens or self.i == 0:
+            return self._peek()
         return self.tokens[self.i - 1]
 
-    def _error_tok(self, tok: Token, message: str, *, code: str = "") -> KDLParseError:
+    def _error_tok(self, tok: RawToken, message: str, *, code: str = "") -> KDLParseError:
+        pos = self._pos(tok.start_offset)
         return KDLParseError(
             message,
-            line=tok.span.start.line,
-            col=tok.span.start.column,
+            line=pos.line,
+            col=pos.column,
             code=code,
         )
 

@@ -29,7 +29,10 @@ class TreeBuilder(Protocol[T_co]):
         name: str,
         type_annotation: str | None,
         span: Span,
-        **kwargs: Any,
+        *,
+        name_raw: str,
+        name_span: Span,
+        type_span: Span | None,
     ) -> None:
         """Called when a node is opened.
 
@@ -37,6 +40,9 @@ class TreeBuilder(Protocol[T_co]):
             name: Node identifier.
             type_annotation: Raw type annotation (e.g. ``"(u8)"``) or ``None``.
             span: Span covering node start up to name end.
+            name_raw: Raw text representation of the node name.
+            name_span: Span of the node name.
+            type_span: Span of the type annotation if present, else None.
         """
         ...
 
@@ -45,7 +51,11 @@ class TreeBuilder(Protocol[T_co]):
         value: Any,
         type_annotation: str | None,
         span: Span,
-        **kwargs: Any,
+        *,
+        raw: str,
+        value_span: Span,
+        type_span: Span | None,
+        is_bare_ident: bool = False,
     ) -> None:
         """Add a positional argument to the currently open node.
 
@@ -53,6 +63,10 @@ class TreeBuilder(Protocol[T_co]):
             value: Argument value (primitive or decoded value).
             type_annotation: Raw type annotation or ``None``.
             span: Span covering the argument value and its type annotation.
+            raw: Raw text representation of the argument.
+            value_span: Span of the value literal/identifier.
+            type_span: Span of the type annotation if present, else None.
+            is_bare_ident: True if value is an unquoted bare identifier.
         """
         ...
 
@@ -62,7 +76,13 @@ class TreeBuilder(Protocol[T_co]):
         value: Any,
         type_annotation: str | None,
         span: Span,
-        **kwargs: Any,
+        *,
+        key_raw: str,
+        key_span: Span,
+        value_raw: str,
+        value_span: Span,
+        type_span: Span | None,
+        is_bare_ident: bool = False,
     ) -> None:
         """Add a named property to the currently open node.
 
@@ -71,6 +91,12 @@ class TreeBuilder(Protocol[T_co]):
             value: Property value.
             type_annotation: Raw type annotation or ``None``.
             span: Span covering key, equal sign, and value.
+            key_raw: Raw text representation of the property key.
+            key_span: Span of the property key.
+            value_raw: Raw text representation of the property value.
+            value_span: Span of the value literal/identifier.
+            type_span: Span of the type annotation if present, else None.
+            is_bare_ident: True if value is an unquoted bare identifier.
         """
         ...
 
@@ -127,6 +153,10 @@ class AstBuilder:
         name: str,
         type_annotation: str | None,
         span: Span,
+        *,
+        name_raw: str = "",
+        name_span: Span | None = None,
+        type_span: Span | None = None,
         **kwargs: Any,
     ) -> None:
         node = KdlNode(
@@ -149,6 +179,11 @@ class AstBuilder:
         value: Any,
         type_annotation: str | None,
         span: Span,
+        *,
+        raw: str = "",
+        value_span: Span | None = None,
+        type_span: Span | None = None,
+        is_bare_ident: bool = False,
         **kwargs: Any,
     ) -> None:
         if self._stack:
@@ -166,6 +201,13 @@ class AstBuilder:
         value: Any,
         type_annotation: str | None,
         span: Span,
+        *,
+        key_raw: str = "",
+        key_span: Span | None = None,
+        value_raw: str = "",
+        value_span: Span | None = None,
+        type_span: Span | None = None,
+        is_bare_ident: bool = False,
         **kwargs: Any,
     ) -> None:
         if self._stack:
@@ -201,6 +243,36 @@ class _CstNodeFrame:
     children_block_span: Span | None = None
 
 
+def _build_cst_value(
+    value: Any,
+    raw: str,
+    span: Span,
+    type_annotation: str | None,
+    type_span: Span | None,
+    is_bare_ident: bool = False,
+) -> CSTValue | CSTIdentifier:
+    if is_bare_ident:
+        return CSTIdentifier(
+            value=str(value),
+            raw=raw,
+            span=span,
+        )
+    type_ann = (
+        CSTTypeAnnotation(
+            raw=type_annotation,
+            span=type_span if type_span is not None else span,
+        )
+        if type_annotation is not None
+        else None
+    )
+    return CSTValue(
+        value=value,
+        raw=raw,
+        span=span,
+        type_annotation=type_ann,
+    )
+
+
 class CstBuilder:
     """Builds a full immutable CSTDocument with CSTNode and CSTEntry objects.
 
@@ -217,15 +289,15 @@ class CstBuilder:
         type_annotation: str | None,
         span: Span,
         *,
-        name_raw: str | None = None,
-        name_span: Span | None = None,
-        type_span: Span | None = None,
+        name_raw: str,
+        name_span: Span,
+        type_span: Span | None,
         **kwargs: Any,
     ) -> None:
         name_id = CSTIdentifier(
             value=name,
-            raw=name_raw if name_raw is not None else name,
-            span=name_span if name_span is not None else span,
+            raw=name_raw,
+            span=name_span,
         )
         type_ann = (
             CSTTypeAnnotation(
@@ -243,38 +315,23 @@ class CstBuilder:
         type_annotation: str | None,
         span: Span,
         *,
-        raw: str | None = None,
-        val_span: Span | None = None,
-        type_span: Span | None = None,
+        raw: str,
+        value_span: Span,
+        type_span: Span | None,
         is_bare_ident: bool = False,
         **kwargs: Any,
     ) -> None:
         if not self._stack:
             return
         frame = self._stack[-1]
-        v_span = val_span if val_span is not None else span
-        v_raw = raw if raw is not None else str(value)
-        if is_bare_ident:
-            val_obj: CSTValue | CSTIdentifier = CSTIdentifier(
-                value=str(value),
-                raw=v_raw,
-                span=v_span,
-            )
-        else:
-            type_ann = (
-                CSTTypeAnnotation(
-                    raw=type_annotation,
-                    span=type_span if type_span is not None else v_span,
-                )
-                if type_annotation is not None
-                else None
-            )
-            val_obj = CSTValue(
-                value=value,
-                raw=v_raw,
-                span=v_span,
-                type_annotation=type_ann,
-            )
+        val_obj = _build_cst_value(
+            value=value,
+            raw=raw,
+            span=value_span,
+            type_annotation=type_annotation,
+            type_span=type_span,
+            is_bare_ident=is_bare_ident,
+        )
         frame.entries.append(CSTArgEntry(value=val_obj, span=span))
 
     def add_prop(
@@ -284,44 +341,26 @@ class CstBuilder:
         type_annotation: str | None,
         span: Span,
         *,
-        key_raw: str | None = None,
-        key_span: Span | None = None,
-        val_raw: str | None = None,
-        val_span: Span | None = None,
-        type_span: Span | None = None,
+        key_raw: str,
+        key_span: Span,
+        value_raw: str,
+        value_span: Span,
+        type_span: Span | None,
         is_bare_ident: bool = False,
         **kwargs: Any,
     ) -> None:
         if not self._stack:
             return
         frame = self._stack[-1]
-        k_span = key_span if key_span is not None else span
-        k_raw = key_raw if key_raw is not None else key
-        key_id = CSTIdentifier(value=key, raw=k_raw, span=k_span)
-
-        v_span = val_span if val_span is not None else span
-        v_raw = val_raw if val_raw is not None else str(value)
-        if is_bare_ident:
-            val_obj: CSTValue | CSTIdentifier = CSTIdentifier(
-                value=str(value),
-                raw=v_raw,
-                span=v_span,
-            )
-        else:
-            type_ann = (
-                CSTTypeAnnotation(
-                    raw=type_annotation,
-                    span=type_span if type_span is not None else v_span,
-                )
-                if type_annotation is not None
-                else None
-            )
-            val_obj = CSTValue(
-                value=value,
-                raw=v_raw,
-                span=v_span,
-                type_annotation=type_ann,
-            )
+        key_id = CSTIdentifier(value=key, raw=key_raw, span=key_span)
+        val_obj = _build_cst_value(
+            value=value,
+            raw=value_raw,
+            span=value_span,
+            type_annotation=type_annotation,
+            type_span=type_span,
+            is_bare_ident=is_bare_ident,
+        )
         frame.entries.append(CSTPropEntry(key=key_id, value=val_obj, span=span))
 
     def start_children(self, span: Span) -> None:
@@ -364,6 +403,10 @@ class _NullBuilder:
         name: str,
         type_annotation: str | None,
         span: Span,
+        *,
+        name_raw: str = "",
+        name_span: Span | None = None,
+        type_span: Span | None = None,
         **kwargs: Any,
     ) -> None:
         pass
@@ -373,6 +416,11 @@ class _NullBuilder:
         value: Any,
         type_annotation: str | None,
         span: Span,
+        *,
+        raw: str = "",
+        value_span: Span | None = None,
+        type_span: Span | None = None,
+        is_bare_ident: bool = False,
         **kwargs: Any,
     ) -> None:
         pass
@@ -383,6 +431,13 @@ class _NullBuilder:
         value: Any,
         type_annotation: str | None,
         span: Span,
+        *,
+        key_raw: str = "",
+        key_span: Span | None = None,
+        value_raw: str = "",
+        value_span: Span | None = None,
+        type_span: Span | None = None,
+        is_bare_ident: bool = False,
         **kwargs: Any,
     ) -> None:
         pass

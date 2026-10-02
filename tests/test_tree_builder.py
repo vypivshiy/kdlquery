@@ -346,3 +346,199 @@ app "my-service" version="1.0" {
         first_server = doc.select_one("server")
         assert first_server is not None
         assert first_server.args[0].value == "web"
+
+
+class TestCodeReviewFixes:
+    def test_exports(self) -> None:
+        import kdlquery
+
+        assert "offset_to_position" in kdlquery.__all__
+        assert "TreeBuilder" in kdlquery.__all__
+        assert "AstBuilder" in kdlquery.__all__
+        assert "CstBuilder" in kdlquery.__all__
+        assert "_Parser" not in kdlquery.__all__
+        assert callable(kdlquery.offset_to_position)
+
+    def test_no_is_cst_builder_attribute_on_parser(self) -> None:
+        src = 'node 123 key="val"'
+        tokens = KDLLexer(src).tokenize_raw()
+        parser = _Parser(tokens, source=src, builder=AstBuilder())
+        assert not hasattr(parser, "_is_cst_builder")
+        doc = parser.parse_document()
+        assert len(doc.nodes) == 1
+
+    def test_uniform_tree_builder_kwargs_received(self) -> None:
+        received_kwargs: dict[str, Any] = {}
+
+        class SpyBuilder:
+            def start_node(
+                self,
+                name: str,
+                type_annotation: str | None,
+                span: Span,
+                *,
+                name_raw: str,
+                name_span: Span,
+                type_span: Span | None,
+            ) -> None:
+                received_kwargs["start_node"] = {
+                    "name": name,
+                    "type_annotation": type_annotation,
+                    "span": span,
+                    "name_raw": name_raw,
+                    "name_span": name_span,
+                    "type_span": type_span,
+                }
+
+            def add_arg(
+                self,
+                value: Any,
+                type_annotation: str | None,
+                span: Span,
+                *,
+                raw: str,
+                value_span: Span,
+                type_span: Span | None,
+                is_bare_ident: bool = False,
+            ) -> None:
+                received_kwargs["add_arg"] = {
+                    "value": value,
+                    "type_annotation": type_annotation,
+                    "span": span,
+                    "raw": raw,
+                    "value_span": value_span,
+                    "type_span": type_span,
+                    "is_bare_ident": is_bare_ident,
+                }
+
+            def add_prop(
+                self,
+                key: str,
+                value: Any,
+                type_annotation: str | None,
+                span: Span,
+                *,
+                key_raw: str,
+                key_span: Span,
+                value_raw: str,
+                value_span: Span,
+                type_span: Span | None,
+                is_bare_ident: bool = False,
+            ) -> None:
+                received_kwargs["add_prop"] = {
+                    "key": key,
+                    "value": value,
+                    "type_annotation": type_annotation,
+                    "span": span,
+                    "key_raw": key_raw,
+                    "key_span": key_span,
+                    "value_raw": value_raw,
+                    "value_span": value_span,
+                    "type_span": type_span,
+                    "is_bare_ident": is_bare_ident,
+                }
+
+            def start_children(self, span: Span) -> None:
+                pass
+
+            def end_children(self, span: Span) -> None:
+                pass
+
+            def end_node(self, span: Span) -> None:
+                pass
+
+            def finish_document(self, span: Span) -> None:
+                pass
+
+        spy = SpyBuilder()
+        assert isinstance(spy, TreeBuilder)
+
+        src = '(my-type)"my-name" (arg-type)42 key=(prop-type)"prop-val"'
+        parser = _Parser(KDLLexer(src).tokenize_raw(), source=src, builder=spy)
+        parser.parse_document()
+
+        assert received_kwargs["start_node"]["name"] == "my-name"
+        assert received_kwargs["start_node"]["name_raw"] == '"my-name"'
+        assert received_kwargs["start_node"]["type_annotation"] == "(my-type)"
+        assert received_kwargs["start_node"]["type_span"] is not None
+
+        assert received_kwargs["add_arg"]["value"] == 42
+        assert received_kwargs["add_arg"]["raw"] == "(arg-type)42"
+        assert received_kwargs["add_arg"]["type_annotation"] == "(arg-type)"
+        assert received_kwargs["add_arg"]["is_bare_ident"] is False
+
+        assert received_kwargs["add_prop"]["key"] == "key"
+        assert received_kwargs["add_prop"]["key_raw"] == "key"
+        assert received_kwargs["add_prop"]["value"] == "prop-val"
+        assert received_kwargs["add_prop"]["value_raw"] == '(prop-type)"prop-val"'
+        assert received_kwargs["add_prop"]["type_annotation"] == "(prop-type)"
+        assert received_kwargs["add_prop"]["is_bare_ident"] is False
+
+    def test_bypassing_cst_allocations_in_ast_mode(self) -> None:
+        from unittest.mock import patch
+
+        src = '(my-type)"node-name" (arg-type)100 prop=(prop-type)"val" {\n    child bare_ident\n}'
+        with patch("kdlquery.builder.CSTIdentifier", wraps=CSTIdentifier) as mock_id:
+            with patch("kdlquery.builder.CSTTypeAnnotation", wraps=CSTTypeAnnotation) as mock_ty:
+                doc = parse(src)
+                assert isinstance(doc, KdlDocument)
+                assert mock_id.call_count == 0
+                assert mock_ty.call_count == 0
+
+    def test_cst_builder_allocations_intact(self) -> None:
+        src = '(my-type)"node-name" (arg-type)100 prop=(prop-type)"val" {\n    child bare_ident\n}'
+        cst = KDL2CSTParser().parse(src)
+        assert isinstance(cst, CSTDocument)
+        assert isinstance(cst.nodes[0].name, CSTIdentifier)
+        assert isinstance(cst.nodes[0].type_annotation, CSTTypeAnnotation)
+
+    def test_parser_accepts_tokens_and_raw_tokens(self) -> None:
+        src = "node 123"
+        # 1. Native raw token stream
+        raw_tokens = KDLLexer(src).tokenize_raw()
+        p1 = _Parser(raw_tokens, source=src, builder=AstBuilder())
+        doc1 = p1.parse_document()
+        assert len(doc1.nodes) == 1
+
+        # 2. Materialized Token stream (backward compatibility)
+        tokens = KDLLexer(src).tokenize()
+        p2 = _Parser(tokens, source=src, builder=AstBuilder())
+        doc2 = p2.parse_document()
+        assert len(doc2.nodes) == 1
+
+        # 3. Materialized Token stream with source=None
+        p3 = _Parser(tokens, source=None, builder=AstBuilder())
+        doc3 = p3.parse_document()
+        assert len(doc3.nodes) == 1
+        assert doc3.nodes[0].span.start.line == 1
+
+    def test_build_cst_value_helper(self) -> None:
+        from kdlquery.builder import _build_cst_value
+        from kdlquery import Position
+
+        dummy_span = Span(Position(0, 1, 1), Position(3, 1, 4))
+        # Bare identifier
+        val1 = _build_cst_value(
+            value="foo",
+            raw="foo",
+            span=dummy_span,
+            type_annotation=None,
+            type_span=None,
+            is_bare_ident=True,
+        )
+        assert isinstance(val1, CSTIdentifier)
+        assert val1.value == "foo"
+
+        # Value with type annotation
+        val2 = _build_cst_value(
+            value=42,
+            raw="(u8)42",
+            span=dummy_span,
+            type_annotation="(u8)",
+            type_span=dummy_span,
+            is_bare_ident=False,
+        )
+        assert isinstance(val2, CSTValue)
+        assert val2.value == 42
+        assert val2.type_annotation is not None
+        assert val2.type_annotation.raw == "(u8)"
