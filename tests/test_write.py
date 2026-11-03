@@ -510,3 +510,52 @@ class TestSlottedTreeModel:
         node.name = "new_name"
         node.type_annotation = "(custom)"
         assert doc.to_kdl() == "(custom) new_name 1\n"
+
+
+class TestSerializerRegexFastPaths:
+    def test_is_bare_ident_fast_path(self) -> None:
+        from kdlquery.serializer import _is_bare_ident
+
+        # Valid bare identifiers
+        assert _is_bare_ident("simple") is True
+        assert _is_bare_ident("kebab-case_123") is True
+        assert _is_bare_ident("--flag") is True
+        assert _is_bare_ident("+plus-ident") is True
+        assert _is_bare_ident(".dot-ident") is True
+        assert _is_bare_ident("+.plus-dot-ident") is True
+        assert _is_bare_ident("-.minus-dot-ident") is True
+        assert _is_bare_ident("café") is True
+        assert _is_bare_ident("日本語") is True
+
+        # Invalid bare identifiers
+        assert _is_bare_ident("") is False
+        for reserved in ("true", "false", "null", "inf", "-inf", "nan"):
+            assert _is_bare_ident(reserved) is False
+        for num_like in ("0", "42", "-1", "+1", ".5", "-.5", "+.5", "-9abc"):
+            assert _is_bare_ident(num_like) is False
+        for ch in '\\/(){};[]"=# \t\n\r\u0085\u00a0\u200e\u202e\u2066\ufeff\x00\x07\x7f\ud800':
+            assert _is_bare_ident(f"a{ch}b") is False
+            assert _is_bare_ident(ch) is False
+
+    def test_escape_quoted_and_multiline_regex_fast_paths(self) -> None:
+        from kdlquery.serializer import _escape_quoted, _serialize_multiline
+
+        # Clean string fast-path
+        assert _escape_quoted("hello world 123") == '"hello world 123"'
+        assert _escape_quoted("") == '""'
+
+        # Escaped characters slow-path
+        assert _escape_quoted('a"b\\c\nd\re\tf\bg\fh') == r'"a\"b\\c\nd\re\tf\bg\fh"'
+        assert _escape_quoted("\x00\x1f\x7f\u200e\u202e\u2066\ufeff") == (
+            r'"\u{0}\u{1F}\u{7F}\u{200E}\u{202E}\u{2066}\u{FEFF}"'
+        )
+
+        # Multiline clean and escaped lines
+        ml_clean = _serialize_multiline("line 1\n\nline 2", depth=0, indent_str="    ")
+        assert ml_clean == '"""\n    line 1\n\n    line 2\n"""'
+
+        ml_esc = _serialize_multiline('quote " and \x07 and \ufeff', depth=1, indent_str="  ")
+        assert ml_esc == '"""\n    quote \\" and \\u{7} and \\u{FEFF}\n  """'
+
+        with pytest.raises(ValueError, match="surrogate"):
+            _serialize_multiline("line1\n\udfff", depth=0, indent_str="    ")

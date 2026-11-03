@@ -233,7 +233,7 @@ class AstBuilder:
         return self.doc
 
 
-@dataclass
+@dataclass(slots=True)
 class _CstNodeFrame:
     name: CSTIdentifier
     type_annotation: CSTTypeAnnotation | None

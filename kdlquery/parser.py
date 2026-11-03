@@ -5,7 +5,7 @@ import math
 import re
 from typing import Any, Generic, NamedTuple, TypeVar, overload
 
-from .builder import AstBuilder, CstBuilder, TreeBuilder, _NULL_BUILDER
+from .builder import AstBuilder, CstBuilder, TreeBuilder, _NULL_BUILDER, _NullBuilder
 
 from .types import (
     CSTArgEntry,
@@ -927,6 +927,20 @@ class ParsedValue(NamedTuple):
     is_bare_ident: bool
 
 
+_EMPTY_SPAN: Span = Span(Position(0, 0, 0), Position(0, 0, 0))
+
+_VALUE_TOKEN_TYPES: frozenset[TokenType] = frozenset(
+    {
+        TokenType.STRING,
+        TokenType.NUMBER,
+        TokenType.BOOL,
+        TokenType.NULL,
+        TokenType.KEYWORD_NUMBER,
+        TokenType.IDENT,
+    }
+)
+
+
 class _Parser(Generic[T]):
     @overload
     def __init__(
@@ -996,11 +1010,13 @@ class _Parser(Generic[T]):
         return Position(offset=offset, line=1, column=offset + 1)
 
     def _span(self, start_offset: int, end_offset: int) -> Span:
-        return Span(self._pos(start_offset), self._pos(end_offset))
+        start_pos = self._pos(start_offset)
+        end_pos = start_pos if end_offset == start_offset else self._pos(end_offset)
+        return Span(start_pos, end_pos)
 
     def parse_document(self) -> T:
         self._skip_separators()
-        start_pos = self._pos(self._peek().start_offset)
+        start_offset = self._peek().start_offset
 
         while not self._at(TokenType.EOF):
             if self._match(TokenType.SLASHDASH):
@@ -1024,8 +1040,11 @@ class _Parser(Generic[T]):
                 )
             self._skip_separators()
 
-        end_pos = self._pos(self._peek().end_offset)
-        res = self.builder.finish_document(Span(start_pos, end_pos))
+        if self.builder is _NULL_BUILDER or type(self.builder) is _NullBuilder:
+            doc_span = _EMPTY_SPAN
+        else:
+            doc_span = self._span(start_offset, self._peek().end_offset)
+        res = self.builder.finish_document(doc_span)
         return res  # type: ignore[no-any-return]
 
     def _parse_discarded_component(self, *, allow_node: bool) -> None:
@@ -1065,27 +1084,69 @@ class _Parser(Generic[T]):
             self._advance()
 
     def _parse_node(self) -> None:
-        node_type = self._try_parse_type_annotation()
-        name = self._parse_identifier_like()
+        builder = self.builder
+        is_null = builder is _NULL_BUILDER or type(builder) is _NullBuilder
+        is_ast = type(builder) is AstBuilder
 
-        start_span = Span(
-            node_type.span.start if node_type else name.span.start,
-            name.span.end,
-        )
+        node_type: ParsedType | None = None
+        name: ParsedIdentifier | None = None
+        node_start_offset = 0
 
-        self.builder.start_node(
-            name.value,
-            node_type.raw if node_type else None,
-            start_span,
-            name_raw=name.raw,
-            name_span=name.span,
-            type_span=node_type.span if node_type else None,
-        )
+        if is_null:
+            if self._match(TokenType.LPAREN):
+                self._consume_identifier_token()
+                self._expect(TokenType.RPAREN)
+            name_tok = self._consume_identifier_token()
+            builder.start_node(
+                str(name_tok.value),
+                None,
+                _EMPTY_SPAN,
+                name_raw=name_tok.raw,
+                name_span=_EMPTY_SPAN,
+                type_span=None,
+            )
+            prev_end = name_tok.end_offset
+        elif is_ast:
+            if self._match(TokenType.LPAREN):
+                lparen = self._prev()
+                self._consume_identifier_token()
+                rparen = self._expect(TokenType.RPAREN)
+                node_type_raw: str | None = self._slice(
+                    lparen.start_offset, rparen.end_offset
+                )
+                node_start_offset = lparen.start_offset
+            else:
+                node_type_raw = None
+            name_tok = self._consume_identifier_token()
+            if node_type_raw is None:
+                node_start_offset = name_tok.start_offset
+            builder.start_node(
+                str(name_tok.value),
+                node_type_raw,
+                _EMPTY_SPAN,
+                name_raw=name_tok.raw,
+                name_span=_EMPTY_SPAN,
+                type_span=None,
+            )
+            prev_end = name_tok.end_offset
+        else:
+            node_type = self._try_parse_type_annotation()
+            name = self._parse_identifier_like()
+            start_span = Span(
+                node_type.span.start if node_type else name.span.start,
+                name.span.end,
+            )
+            builder.start_node(
+                name.value,
+                node_type.raw if node_type else None,
+                start_span,
+                name_raw=name.raw,
+                name_span=name.span,
+                type_span=node_type.span if node_type else None,
+            )
+            prev_end = name.span.end.offset
 
         has_children_block = False
-
-        # Node Space: track end offset of last significant token before each entry
-        prev_end = name.span.end.offset
 
         while not self._is_node_terminator() and not self._at(TokenType.LBRACE):
             if self._match(TokenType.SLASHDASH):
@@ -1107,8 +1168,7 @@ class _Parser(Generic[T]):
                     "Expected whitespace before entry",
                     code="expected-whitespace",
                 )
-            entry_span = self._parse_entry()
-            prev_end = entry_span.end.offset
+            prev_end = self._parse_entry()
 
         while True:
             if self._match(TokenType.SLASHDASH):
@@ -1131,8 +1191,11 @@ class _Parser(Generic[T]):
                 )
             has_children_block = True
             lbrace = self._prev()
-            lbrace_span = self._span(lbrace.start_offset, lbrace.end_offset)
-            self.builder.start_children(lbrace_span)
+            if is_null or is_ast:
+                lbrace_span = _EMPTY_SPAN
+            else:
+                lbrace_span = self._span(lbrace.start_offset, lbrace.end_offset)
+            builder.start_children(lbrace_span)
 
             self._skip_separators()
             while not self._at(TokenType.RBRACE):
@@ -1151,16 +1214,135 @@ class _Parser(Generic[T]):
                 self._consume_terminators()
                 self._skip_separators()
             rbrace = self._expect(TokenType.RBRACE)
-            children_block_span = Span(lbrace_span.start, self._pos(rbrace.end_offset))
-            self.builder.end_children(children_block_span)
+            if is_null or is_ast:
+                children_block_span = _EMPTY_SPAN
+            else:
+                children_block_span = Span(
+                    lbrace_span.start, self._pos(rbrace.end_offset)
+                )
+            builder.end_children(children_block_span)
 
-        end_pos = self._pos(self._prev().end_offset) if self.i > 0 else name.span.end
-        node_span = Span(
-            (node_type.span.start if node_type else name.span.start), end_pos
-        )
-        self.builder.end_node(node_span)
+        if is_null:
+            builder.end_node(_EMPTY_SPAN)
+        elif is_ast:
+            end_offset = (
+                self._prev().end_offset if self.i > 0 else name_tok.end_offset
+            )
+            builder.end_node(self._span(node_start_offset, end_offset))
+        else:
+            assert name is not None
+            end_pos = (
+                self._pos(self._prev().end_offset) if self.i > 0 else name.span.end
+            )
+            node_span = Span(
+                (node_type.span.start if node_type else name.span.start), end_pos
+            )
+            builder.end_node(node_span)
 
-    def _parse_entry(self) -> Span:
+    def _parse_entry(self) -> int:
+        builder = self.builder
+        if builder is _NULL_BUILDER or type(builder) is _NullBuilder:
+            if (
+                self._is_identifier_token(self._peek())
+                and self._peek(1).typ == TokenType.EQUAL
+            ):
+                key_tok = self._consume_identifier_token()
+                self._expect(TokenType.EQUAL)
+                if self._match(TokenType.LPAREN):
+                    self._consume_identifier_token()
+                    self._expect(TokenType.RPAREN)
+                val_tok = self._consume_value_token()
+                builder.add_prop(
+                    str(key_tok.value),
+                    val_tok.value,
+                    None,
+                    _EMPTY_SPAN,
+                    key_raw=key_tok.raw,
+                    key_span=_EMPTY_SPAN,
+                    value_raw=val_tok.raw,
+                    value_span=_EMPTY_SPAN,
+                    type_span=None,
+                )
+                return val_tok.end_offset
+
+            if self._match(TokenType.LPAREN):
+                self._consume_identifier_token()
+                self._expect(TokenType.RPAREN)
+            val_tok = self._consume_value_token()
+            builder.add_arg(
+                val_tok.value,
+                None,
+                _EMPTY_SPAN,
+                raw=val_tok.raw,
+                value_span=_EMPTY_SPAN,
+                type_span=None,
+            )
+            return val_tok.end_offset
+
+        if type(builder) is AstBuilder:
+            if (
+                self._is_identifier_token(self._peek())
+                and self._peek(1).typ == TokenType.EQUAL
+            ):
+                key_tok = self._consume_identifier_token()
+                self._expect(TokenType.EQUAL)
+                if self._match(TokenType.LPAREN):
+                    lparen = self._prev()
+                    self._consume_identifier_token()
+                    rparen = self._expect(TokenType.RPAREN)
+                    val_type_raw: str | None = self._slice(
+                        lparen.start_offset, rparen.end_offset
+                    )
+                else:
+                    val_type_raw = None
+                val_tok = self._consume_value_token()
+                val = (
+                    str(val_tok.value)
+                    if val_tok.typ == TokenType.IDENT
+                    else val_tok.value
+                )
+                entry_span = self._span(key_tok.start_offset, val_tok.end_offset)
+                builder.add_prop(
+                    str(key_tok.value),
+                    val,
+                    val_type_raw,
+                    entry_span,
+                    key_raw=key_tok.raw,
+                    key_span=_EMPTY_SPAN,
+                    value_raw=val_tok.raw,
+                    value_span=entry_span,
+                    type_span=None,
+                )
+                return val_tok.end_offset
+
+            if self._match(TokenType.LPAREN):
+                lparen = self._prev()
+                self._consume_identifier_token()
+                rparen = self._expect(TokenType.RPAREN)
+                val_type_raw = self._slice(lparen.start_offset, rparen.end_offset)
+                arg_start_offset = lparen.start_offset
+            else:
+                val_type_raw = None
+                arg_start_offset = -1
+            val_tok = self._consume_value_token()
+            if val_type_raw is None:
+                arg_start_offset = val_tok.start_offset
+            val = (
+                str(val_tok.value)
+                if val_tok.typ == TokenType.IDENT
+                else val_tok.value
+            )
+            arg_span = self._span(arg_start_offset, val_tok.end_offset)
+            builder.add_arg(
+                val,
+                val_type_raw,
+                arg_span,
+                raw=val_tok.raw,
+                value_span=arg_span,
+                type_span=None,
+            )
+            return val_tok.end_offset
+
         # property: key = value, where key is an identifier string
         if (
             self._is_identifier_token(self._peek())
@@ -1170,7 +1352,7 @@ class _Parser(Generic[T]):
             self._expect(TokenType.EQUAL)
             parsed_val = self._parse_value_like_info()
             entry_span = Span(key.span.start, parsed_val.span.end)
-            self.builder.add_prop(
+            builder.add_prop(
                 key.value,
                 parsed_val.value,
                 parsed_val.type_annotation.raw if parsed_val.type_annotation else None,
@@ -1182,10 +1364,10 @@ class _Parser(Generic[T]):
                 type_span=parsed_val.type_annotation.span if parsed_val.type_annotation else None,
                 is_bare_ident=parsed_val.is_bare_ident,
             )
-            return entry_span
+            return parsed_val.span.end.offset
 
         parsed_val = self._parse_value_like_info()
-        self.builder.add_arg(
+        builder.add_arg(
             parsed_val.value,
             parsed_val.type_annotation.raw if parsed_val.type_annotation else None,
             parsed_val.span,
@@ -1194,14 +1376,30 @@ class _Parser(Generic[T]):
             type_span=parsed_val.type_annotation.span if parsed_val.type_annotation else None,
             is_bare_ident=parsed_val.is_bare_ident,
         )
-        return parsed_val.span
+        return parsed_val.span.end.offset
+
+    def _consume_identifier_token(self) -> RawToken:
+        tok = self._peek()
+        if not self._is_identifier_token(tok):
+            raise self._error_tok(
+                tok, f"Expected identifier, got {tok.typ}", code="expected-identifier"
+            )
+        return self._advance()
+
+    def _consume_value_token(self) -> RawToken:
+        tok = self._peek()
+        if tok.typ not in _VALUE_TOKEN_TYPES:
+            raise self._error_tok(
+                tok, f"Expected value, got {tok.typ}", code="expected-value"
+            )
+        return self._advance()
 
     def _try_parse_type_annotation(self) -> ParsedType | None:
         if not self._match(TokenType.LPAREN):
             return None
 
         lparen = self._prev()
-        self._parse_identifier_like()
+        self._consume_identifier_token()
         rparen = self._expect(TokenType.RPAREN)
 
         raw = self._slice(lparen.start_offset, rparen.end_offset)
@@ -1211,12 +1409,7 @@ class _Parser(Generic[T]):
         )
 
     def _parse_identifier_like(self) -> ParsedIdentifier:
-        tok = self._peek()
-        if not self._is_identifier_token(tok):
-            raise self._error_tok(
-                tok, f"Expected identifier, got {tok.typ}", code="expected-identifier"
-            )
-        self._advance()
+        tok = self._consume_identifier_token()
         return ParsedIdentifier(
             value=str(tok.value),
             raw=tok.raw,

@@ -542,3 +542,119 @@ class TestCodeReviewFixes:
         assert val2.value == 42
         assert val2.type_annotation is not None
         assert val2.type_annotation.raw == "(u8)"
+
+
+class TestParserSpanFastPathsAndSlots:
+    def test_cst_node_frame_uses_slots(self) -> None:
+        from kdlquery import Position
+        from kdlquery.builder import _CstNodeFrame
+
+        assert hasattr(_CstNodeFrame, "__slots__")
+        dummy_span = Span(Position(0, 1, 1), Position(4, 1, 5))
+        frame = _CstNodeFrame(
+            name=CSTIdentifier(value="node", raw="node", span=dummy_span),
+            type_annotation=None,
+        )
+        assert not hasattr(frame, "__dict__")
+
+    def test_null_builder_and_slashdash_skip_bisect_right(self) -> None:
+        from unittest.mock import patch
+        from kdlquery.builder import _NULL_BUILDER, _NullBuilder
+        import kdlquery.parser as parser_mod
+
+        src_discarded_only = """\
+/- (service)discarded_root (u8)10 key=(str)"val" {
+    (sub)child 1 2 prop=#true {
+        grandchild "deep"
+    }
+}
+"""
+        lexer = KDLLexer(src_discarded_only)
+        raw_tokens = lexer.tokenize_raw()
+
+        # Parsing with _NULL_BUILDER / _NullBuilder directly makes 0 position lookups
+        with patch.object(
+            parser_mod,
+            "offset_to_position",
+            wraps=parser_mod.offset_to_position,
+        ) as mock_pos:
+            p_null = _Parser(
+                raw_tokens,
+                source=src_discarded_only,
+                builder=_NullBuilder(),
+                line_starts=lexer._line_starts,
+            )
+            p_null.parse_document()
+            assert mock_pos.call_count == 0
+
+        # Slashdashed subtrees and entries under AstBuilder or CstBuilder do not trigger extra lookups
+        src_clean = '(app)server (u16)8080 host="localhost" {\n    route "/api"\n}\n'
+        src_with_slashdash = (
+            '/- (dropped)big_node (u8)1 (u8)2 dropped_key=(str)"x" {\n'
+            '    nested_dropped (i32)99 flag=#false\n'
+            '}\n'
+            '(app)server /- (u16)9999 (u16)8080 /- bad_host=(str)"no" host="localhost" {\n'
+            '    /- (dropped_route)route "/old" {\n'
+            '        handler "legacy"\n'
+            '    }\n'
+            '    route "/api"\n'
+            '}\n'
+        )
+
+        with patch.object(
+            parser_mod,
+            "offset_to_position",
+            wraps=parser_mod.offset_to_position,
+        ) as mock_clean:
+            doc_clean = parse(src_clean)
+            clean_calls = mock_clean.call_count
+
+        with patch.object(
+            parser_mod,
+            "offset_to_position",
+            wraps=parser_mod.offset_to_position,
+        ) as mock_slash:
+            doc_slash = parse(src_with_slashdash)
+            slash_calls = mock_slash.call_count
+
+        assert slash_calls == clean_calls
+        assert len(doc_slash.nodes) == len(doc_clean.nodes) == 1
+        assert _NULL_BUILDER is not None
+
+    def test_ast_builder_skips_unused_intermediate_spans(self) -> None:
+        from unittest.mock import patch
+        import kdlquery.parser as parser_mod
+
+        src = '(service)server (u16)8080 host=(hostname)"localhost" {\n    (route)endpoint "/health" (str)ok\n}\n'
+
+        with patch.object(
+            parser_mod,
+            "offset_to_position",
+            wraps=parser_mod.offset_to_position,
+        ) as mock_ast:
+            ast_doc = parse(src)
+            ast_pos_calls = mock_ast.call_count
+
+        with patch.object(
+            parser_mod,
+            "offset_to_position",
+            wraps=parser_mod.offset_to_position,
+        ) as mock_cst:
+            cst_doc = KDL2CSTParser().parse(src)
+            cst_pos_calls = mock_cst.call_count
+
+        # AstBuilder only computes:
+        # - 1 doc span (2 pos)
+        # - 2 node spans (4 pos)
+        # - 3 arg spans (6 pos)
+        # - 1 prop span (2 pos)
+        # Total = 14 position lookups, strictly less than CstBuilder
+        assert ast_pos_calls == 14
+        assert ast_pos_calls < cst_pos_calls
+
+        # Exact span equivalence between AstBuilder and CstBuilder
+        adapted = KdlDocument.from_cst(cst_doc)
+        assert ast_doc.span == adapted.span
+        for n_ast, n_cst in zip(ast_doc.nodes, adapted.nodes):
+            _assert_ast_trees_equal(n_ast, n_cst)
+
