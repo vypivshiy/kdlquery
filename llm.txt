@@ -46,8 +46,10 @@ app.select("*:root")               # → [] (no root concept in subtree)
 
 # Mutation + serialization
 from kdlquery import KdlNode, KdlValue
-app.add_child(KdlNode.create("footer", args=[KdlValue.create(True)]))
-app.set_prop("migrated", KdlValue.create(True))
+app.add_child(KdlNode.create("footer", args=[True], properties={"port": 8080}))
+app.set_prop("migrated", True)
+app.set_prop("port", 8080, type_annotation="(u16)")
+app.add_arg("v2", type_annotation="(tag)")
 doc.to_kdl()                       # → KDL 2.0 text with trailing newline
 app.to_kdl(indent_str="\t")        # → custom indent
 ```
@@ -58,7 +60,8 @@ app.to_kdl(indent_str="\t")        # → custom indent
 kdlquery/
   __init__.py      — Public API: parse(), parse_into(), all major types
   types.py         — CST types: Token, CSTNode, CSTValue, CSTEntry, Span, Position
-  parser.py        — KDLLexer, KDL2CSTParser, escape/multiline string decoding
+  builder.py       — TreeBuilder protocol, AstBuilder (direct KdlDocument), CstBuilder, _NullBuilder
+  parser.py        — KDLLexer, KDL2CSTParser, _Parser, escape/multiline string decoding
   document.py      — KdlDocument: select(), select_one(), parent_of(), depth_of(), mutation (add_node/insert_node/remove_node), to_kdl()
   reader.py        — KdlNode (mutable, parent refs, mutators, create(), to_kdl()), KdlValue (frozen, create()/keyword(), to_kdl()), _Keyword sentinel, Reader ABC, Walker, WalkContext, parse_into()
   serializer.py    — value_to_kdl(), node_to_kdl(), doc_to_kdl(): KDL 2.0 spec-compliant serialization with bare-ident detection, escapes, multiline reindent
@@ -66,10 +69,12 @@ kdlquery/
   selector.py      — SelectorLexer, SelectorParser, SelectorMatcher, MatchContext Protocol, _SubtreeContext, _SingleNodeContext + AST types
 tests/
   test_kdl_parser.py
+  test_tree_builder.py
   test_selector.py
   test_reader.py
   test_navigation.py
   test_write.py
+  test_benchmark.py
 ```
 
 ## Dependencies
@@ -81,20 +86,21 @@ tests/
 
 ### Entry points
 
-- `parse(source: str) -> KdlDocument` — Parse KDL 2.0 string into queryable document tree.
-- `parse_into(document: CSTDocument, reader: Reader, *, strict=False) -> tuple[R, list[ReadDiagnostic]]` — Walk CST through a Reader.
+- `parse(source: str) -> KdlDocument` — Parse KDL 2.0 string directly into a queryable `KdlDocument` tree via single-pass `AstBuilder`.
+- `parse_into(document: CSTDocument | KdlDocument | str, reader: Reader, *, strict=False) -> tuple[R, list[ReadDiagnostic]]` — Walk a KDL source string, `KdlDocument`, or `CSTDocument` through a `Reader` (automatically wires `node.document` across the tree).
 
 ### Key types
 
 - **KdlDocument** — Owns the node tree; provides `select()`, `select_one()`, `parent_of()`, `depth_of()`, `index_of()`, `siblings_of()`, `iter_nodes()`. Mutation: `add_node()`, `insert_node()`, `remove_node()`. Serialization: `to_kdl(indent_str="    ") -> str` (trailing newline; empty doc → `""`).
 - **KdlNode** — Mutable node with `name`, `type_annotation`, `args` (list), `properties` (dict), `children` (list), `span`, `parent`. Methods:
   - Value access: `get_arg(i)`, `get_prop(k)`, `has_prop(k)`, `iter_args()`, `iter_props()`
-  - Mutation: `create(name, *, args=, properties=, children=, type_annotation=)` (classmethod factory), `add_child()`, `insert_child(i,)`, `remove_child(i)`, `add_arg()`, `set_prop(k,)`, `remove_prop(k)`
+  - Mutation: `create(name, *, args=, properties=, children=, type_annotation=)` (classmethod factory; `args` and `properties` accept `KdlValue` or raw Python primitives), `add_child()`, `insert_child(i,)`, `remove_child(i)` (clears `parent` and `document` on removed node and all descendants), `add_arg(value, *, type_annotation=None)`, `set_prop(k, value, *, type_annotation=None)` (accepts `KdlValue` or raw Python primitives), `remove_prop(k)`
   - Selector queries: `select(selector)`, `select_one(selector)` — scoped to descendants, cannot access parent or root nodes.
   - Navigation (DOM-like): `root` (property), `document` (property), `depth()`, `index()`, `siblings()`, `iter_descendants()`, `parents()`, `matches(selector)`, `closest(selector)`
   - Serialization: `to_kdl(*, indent=0, indent_str="    ", force_children_block=False) -> str`
 - **KdlValue** — Frozen typed value with `value`, `span`, `type_annotation`. Factories: `create(value, type_annotation=None)` (Python primitive → inferred KDL literal), `keyword(raw)` (raw passthrough wrapped in `_Keyword` sentinel). Serialization: `to_kdl(*, indent=0, indent_str="    ") -> str`.
 - **Reader[T_node, R]** — ABC with `on_node()`, `error_node()`, `finalize()`.
+- **Walker[T_node]** — Tree walker with `walk()`, `walk_children()`, and `walk_document(document: CSTDocument | KdlDocument | str)`.
 - **DictReader** — Built-in reader producing `Node` TypedDicts.
 - **SelectorError** — Raised on invalid selector syntax.
 
@@ -121,7 +127,7 @@ name                    by bare identifier
 ["key"] or ['key']      quoted property key (handles ., :, >, spaces)
 [key\.name]             backslash-escaped property key
 ["0"]                   property with string key "0" (distinguished from arg 0)
-[key=val]               equals
+[key=val]               equals (strings, signed int/float like -5/-0.5, #true, #false, #null, #inf, #-inf, #nan)
 [key^=val]              starts with
 [key$=val]              ends with
 [key~=val]              contains
@@ -130,7 +136,7 @@ name                    by bare identifier
 
 # Argument filters
 [N]                     positional argument at index N exists (unquoted integer)
-[N=val]                 positional argument at index N equals val
+[N=val]                 positional argument at index N equals val (supports negative numbers & KDL 2.0 literals)
 [N^=val]                starts with
 [N$=val]                ends with
 [N~=val]                contains
@@ -150,13 +156,18 @@ A, B                    union (deduplicated)
 :first-child
 :last-child
 :nth-child(n)
+:nth-child(odd)
+:nth-child(even)
 :nth-child(2n)
 :nth-child(2n+1)
+:nth-child(-n+3)
 :only-child
 :empty
 :not(selector)
-:has(selector)
-:has(> selector)
+:has(selector)          descendant (supports multi-step chains like a > b)
+:has(> selector)        direct child (supports multi-step chains like > a > b)
+:has(+ selector)        adjacent following sibling
+:has(~ selector)        general following sibling
 ```
 
 ## Reader pattern
@@ -229,10 +240,12 @@ Codes are path-like, lowercase-kebab, and extensible. Adding a new category = on
 ## Conventions
 - `KdlValue` is frozen (immutable); constructed via `KdlValue.create()` or `KdlValue.keyword()`.
 - `KdlNode` is mutable. `args` and `children` are `list[KdlValue]` / `list[KdlNode]`; `properties` is `dict[str, KdlValue]`. `KdlDocument.nodes` is `list[KdlNode]`.
-- Mutators (`add_child`, `insert_child`, `add_node`, etc.) wire `parent` and `_document` back-references on inserted subtrees automatically.
+- `KdlNode.create()`, `add_arg()`, and `set_prop()` auto-wrap raw Python primitives (`str`, `int`, `float`, `bool`, `None`) into `KdlValue` while still accepting `KdlValue` instances directly; `add_arg()` and `set_prop()` also accept an optional `type_annotation` keyword argument.
+- Mutators (`add_child`, `insert_child`, `add_node`, etc.) wire `parent` and `_document` back-references on inserted subtrees automatically; `remove_child` clears `parent` and `_document` on the removed node and all of its descendants.
+- `parse_into` and `Walker.walk_document` accept `str | KdlDocument | CSTDocument` and wire `_document` back-references across the tree.
 - `_EMPTY_SPAN` (sentinel) is the default span for synthetic nodes/values produced via `create()`/`KdlNode.create()`.
 - Source spans (`Span(start=Position, end=Position)`) on every CST node and high-level node.
-- Selector parsing is cached with `functools.lru_cache`.
+- Selector parsing and type annotation normalization are cached with `functools.lru_cache`.
 - KDL 2.0 spec features: slashdash comments, esclines, multiline strings, raw strings, type annotations, unicode whitespace.
 - Serializer is spec-compliant but not byte-identical round-trip: comments (`//`, `/* */`, `/-`), raw-string variants, hex/octal/binary number formats, BOM, and version markers are normalized away.
 

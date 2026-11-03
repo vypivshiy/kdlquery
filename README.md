@@ -107,12 +107,20 @@ doc.select("server")
 doc.select("(network)")
 # → [server "primary", server "replica"]
 
-# Property filters
+# Property filters (supports strings, signed numbers, and KDL 2.0 literals: #true, #false, #null, #inf, #-inf, #nan)
 doc.select("server[tls=#true]")
 # → [server "primary"]
 
 doc.select('route[handler^="users"]')
 # → [route "GET" "/api/users", route "POST" "/api/users"]
+
+# Negative numbers and KDL 2.0 keyword literals
+doc.select("node[offset=-5]")
+doc.select("node[delta=-0.5]")
+doc.select("node[val=#null]")
+doc.select("node[val=#inf]")
+doc.select("node[val=#-inf]")
+doc.select("node[val=#nan]")
 
 # Argument filters (select first arg)
 doc.select('route[0="GET"]')
@@ -153,6 +161,15 @@ doc.select("host:only-child")
 doc.select("app:root")
 # → [app]
 
+doc.select("route:nth-child(odd)")
+# → [route "GET" "/api/users", route "GET" "/api/health"]
+
+doc.select("route:nth-child(even)")
+# → [route "POST" "/api/users", route "GET" "/static/*"]
+
+doc.select("route:nth-child(-n+2)")
+# → [route "GET" "/api/users", route "POST" "/api/users"]
+
 # :not()
 doc.select("server:not([port=8080])")
 # → [server "replica"]
@@ -160,15 +177,27 @@ doc.select("server:not([port=8080])")
 doc.select("plugin:not(:empty)")
 # → [plugin "auth", plugin "cache"]
 
-# :has()
+# :has() — descendant, child (>), adjacent sibling (+), general sibling (~), and multi-step chains
 doc.select("plugin:has(backend)")
 # → [plugin "cache"]
 
 doc.select("app:has(> router)")
 # → [app]
 
+doc.select("app:has(> router > route)")
+# → [app]
+
+doc.select("app:has(server > host)")
+# → [app]
+
 doc.select("plugin:has(> secret[(regex)key])")
 # → [plugin "auth"]
+
+doc.select('route:has(+ route[0="POST"])')
+# → [route "GET" "/api/users"]
+
+doc.select("plugin:has(~ plugin[enabled=#false])")
+# → [plugin "auth", plugin "cache"]
 
 # Comma (union) — deduplicates by node identity
 doc.select("app, router")
@@ -305,12 +334,12 @@ host.closest("nonexistent")           # None
 
 ### Reader API
 
-The Reader API transforms a KDL document into domain objects while collecting source-span diagnostics. While `parse()` constructs a queryable `KdlDocument` directly, `parse_into()` walks a `CSTDocument` from `KDL2CSTParser` to preserve exact source positions for validation errors.
+The Reader API transforms a KDL document into domain objects while collecting source-span diagnostics. `parse_into()` and `Walker.walk_document()` accept a raw KDL `str`, a `KdlDocument`, or a `CSTDocument` from `KDL2CSTParser`, automatically wiring `node.document` across the tree before traversal.
 
 ```python
-from kdlquery import KDL2CSTParser, DictReader, parse_into
+from kdlquery import DictReader, parse_into
 
-cst = KDL2CSTParser().parse("""
+source = """
 database "primary" {
     host "db.example.com"
     port 5432
@@ -319,9 +348,10 @@ database "replica" {
     host "db-replica.example.com"
     port 5433
 }
-""")
+"""
 
-result, diagnostics = parse_into(cst, DictReader())
+# Pass a KDL string, KdlDocument, or CSTDocument directly
+result, diagnostics = parse_into(source, DictReader())
 
 # result is a list of plain dicts
 # [
@@ -372,16 +402,17 @@ from kdlquery import KdlNode, KdlValue
 
 node = KdlNode.create(
     "@check",
-    args=[KdlValue.create("exists")],
+    args=["exists"],
+    properties={"timeout": 30},
     children=[
-        KdlNode.create("css", args=[KdlValue.create(".foo")]),
+        KdlNode.create("css", args=[".foo"]),
         KdlNode.create("to-bool"),
-        KdlNode.create("fallback", args=[KdlValue.create(False)]),
+        KdlNode.create("fallback", args=[False]),
     ],
 )
 ```
 
-`KdlValue.create()` accepts Python primitives (`bool`, `None`, `int`, `float`, `str`) and infers the KDL literal at serialization time. For raw passthrough of an arbitrary keyword (`#true`, `#null`, `#inf`, or implementation-defined), use `KdlValue.keyword("#custom")` — the string is emitted verbatim.
+`KdlNode.create()`, `node.add_arg()`, and `node.set_prop()` accept raw Python primitives (`bool`, `None`, `int`, `float`, `str`) directly and wrap them into `KdlValue` instances automatically, while still accepting explicit `KdlValue` objects. `KdlValue.create()` infers the KDL literal at serialization time. For raw passthrough of an arbitrary keyword (`#true`, `#null`, `#inf`, or implementation-defined), use `KdlValue.keyword("#custom")` — the string is emitted verbatim.
 
 **Mutating an existing tree:**
 
@@ -390,12 +421,13 @@ doc = parse(source)
 struct = doc.select_one("struct")
 
 # Insert children — parent and document back-refs are wired automatically.
-struct.insert_child(0, KdlNode.create("@request", args=[KdlValue.create("GET /")]))
-struct.add_child(KdlNode.create("note", args=[KdlValue.create("added")]))
+struct.insert_child(0, KdlNode.create("@request", args=["GET /"]))
+struct.add_child(KdlNode.create("note", args=["added"]))
 
-# Properties and arguments
-struct.set_prop("migrated", KdlValue.create(True))
-struct.add_arg(KdlValue.create(42))
+# Properties and arguments (accepts raw primitives or KdlValue, with optional type_annotation)
+struct.set_prop("migrated", True)
+struct.set_prop("port", 8080, type_annotation="(u16)")
+struct.add_arg(42, type_annotation="(i32)")
 struct.remove_prop("legacy")
 
 # Top-level nodes
@@ -403,7 +435,7 @@ doc.add_node(KdlNode.create("footer"))
 doc.remove_node(0)
 ```
 
-Mutation methods: `KdlNode.add_child` / `insert_child` / `remove_child` / `add_arg` / `set_prop` / `remove_prop`; `KdlDocument.add_node` / `insert_node` / `remove_node`. Each mutator propagates `parent` and `document` back-references to the inserted subtree.
+Mutation methods: `KdlNode.add_child` / `insert_child` / `remove_child` / `add_arg` / `set_prop` / `remove_prop`; `KdlDocument.add_node` / `insert_node` / `remove_node`. Each mutator propagates `parent` and `document` back-references to the inserted subtree (and `remove_child` clears them across the removed subtree).
 
 **Serializing back to KDL 2.0:**
 
@@ -428,15 +460,15 @@ The serializer is KDL 2.0 spec-compliant:
 **Migration example:**
 
 ```python
-from kdlquery import parse, KdlNode, KdlValue
+from kdlquery import parse, KdlNode
 
 doc = parse('struct "old" {}')
 struct = doc.nodes[0]
-struct.insert_child(0, KdlNode.create("@request", args=[KdlValue.create("GET /")]))
-struct.insert_child(1, KdlNode.create("@check", args=[KdlValue.create("exists")], children=[
-    KdlNode.create("css", args=[KdlValue.create(".foo")]),
+struct.insert_child(0, KdlNode.create("@request", args=["GET /"]))
+struct.insert_child(1, KdlNode.create("@check", args=["exists"], children=[
+    KdlNode.create("css", args=[".foo"]),
     KdlNode.create("to-bool"),
-    KdlNode.create("fallback", args=[KdlValue.create(False)]),
+    KdlNode.create("fallback", args=[False]),
 ]))
 result = doc.to_kdl()
 ```
@@ -485,7 +517,7 @@ name                    # by bare identifier
 ["key"] or ['key']      # quoted property key (handles ., :, >, spaces)
 [key\.name]             # backslash-escaped property key
 ["0"]                   # property with string key "0" (distinguished from arg 0)
-[key=val]               # equals
+[key=val]               # equals (strings, signed int/float like -5/-0.5, #true, #false, #null, #inf, #-inf, #nan)
 [key^=val]              # starts with
 [key$=val]              # ends with
 [key~=val]              # contains
@@ -494,7 +526,7 @@ name                    # by bare identifier
 
 # Arguments
 [N]                     # positional argument at index N exists (unquoted integer)
-[N=val]                 # positional argument at index N equals val
+[N=val]                 # positional argument at index N equals val (supports negative numbers & KDL 2.0 literals)
 [N^=val]                # starts with
 [N$=val]                # ends with
 [N~=val]                # contains
@@ -514,13 +546,18 @@ A, B                    # union (deduplicated)
 :first-child
 :last-child
 :nth-child(n)
+:nth-child(odd)
+:nth-child(even)
 :nth-child(2n)
 :nth-child(2n+1)
+:nth-child(-n+3)
 :only-child
 :empty
 :not(selector)
-:has(selector)
-:has(> selector)
+:has(selector)          # descendant (supports multi-step chains like a > b)
+:has(> selector)        # direct child (supports multi-step chains like > a > b)
+:has(+ selector)        # adjacent following sibling
+:has(~ selector)        # general following sibling
 ```
 
 ## License
