@@ -254,9 +254,9 @@ class TestDirectAstAndCstEquivalence:
         snippets = [
             'node "arg" prop=123',
             '(pub)item "str" (u8)42 key=(bool)#true',
-            'empty_node',
+            "empty_node",
             'parent {\n    child-a 1\n    child-b key="val" {\n        grandchild\n    }\n}',
-            'node 0x1F 0b101 #-inf #null #nan',
+            "node 0x1F 0b101 #-inf #null #nan",
             '/- discarded\nnode /- "arg" 123 /- prop="bad" good="yes" {\n    /- { sub }\n    child\n}',
         ]
         for src in snippets:
@@ -479,7 +479,9 @@ class TestCodeReviewFixes:
 
         src = '(my-type)"node-name" (arg-type)100 prop=(prop-type)"val" {\n    child bare_ident\n}'
         with patch("kdlquery.builder.CSTIdentifier", wraps=CSTIdentifier) as mock_id:
-            with patch("kdlquery.builder.CSTTypeAnnotation", wraps=CSTTypeAnnotation) as mock_ty:
+            with patch(
+                "kdlquery.builder.CSTTypeAnnotation", wraps=CSTTypeAnnotation
+            ) as mock_ty:
                 doc = parse(src)
                 assert isinstance(doc, KdlDocument)
                 assert mock_id.call_count == 0
@@ -591,14 +593,14 @@ class TestParserSpanFastPathsAndSlots:
         src_clean = '(app)server (u16)8080 host="localhost" {\n    route "/api"\n}\n'
         src_with_slashdash = (
             '/- (dropped)big_node (u8)1 (u8)2 dropped_key=(str)"x" {\n'
-            '    nested_dropped (i32)99 flag=#false\n'
-            '}\n'
+            "    nested_dropped (i32)99 flag=#false\n"
+            "}\n"
             '(app)server /- (u16)9999 (u16)8080 /- bad_host=(str)"no" host="localhost" {\n'
             '    /- (dropped_route)route "/old" {\n'
             '        handler "legacy"\n'
-            '    }\n'
+            "    }\n"
             '    route "/api"\n'
-            '}\n'
+            "}\n"
         )
 
         with patch.object(
@@ -657,4 +659,3 @@ class TestParserSpanFastPathsAndSlots:
         assert ast_doc.span == adapted.span
         for n_ast, n_cst in zip(ast_doc.nodes, adapted.nodes):
             _assert_ast_trees_equal(n_ast, n_cst)
-

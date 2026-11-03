@@ -319,8 +319,12 @@ meta version="1.0"
                         "app",
                         args=["service"],
                         children=[
-                            KdlNode.create("server", args=["primary"], properties={"port": 8080}),
-                            KdlNode.create("server", args=["secondary"], properties={"port": 8081}),
+                            KdlNode.create(
+                                "server", args=["primary"], properties={"port": 8080}
+                            ),
+                            KdlNode.create(
+                                "server", args=["secondary"], properties={"port": 8081}
+                            ),
                         ],
                     ),
                     KdlNode.create("meta", properties={"version": "1.0"}),

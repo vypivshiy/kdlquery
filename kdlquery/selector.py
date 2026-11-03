@@ -175,7 +175,7 @@ class _Tok(NamedTuple):
     value: Any
 
 
-_SPECIAL = set('()[]{}=^$~*+>:#"\'/,')
+_SPECIAL = set("()[]{}=^$~*+>:#\"'/,")
 
 
 def _unescape_string(s: str) -> str:
@@ -267,7 +267,9 @@ class SelectorLexer:
         if ch in ('"', "'"):
             return self._read_string(ch)
         if ch.isdigit() or (
-            ch == "-" and self._i + 1 < len(self._src) and self._src[self._i + 1].isdigit()
+            ch == "-"
+            and self._i + 1 < len(self._src)
+            and self._src[self._i + 1].isdigit()
         ):
             return self._read_number()
         if ch == "\\" or (ch not in _SPECIAL and not ch.isspace()):
@@ -309,7 +311,9 @@ class SelectorLexer:
             raise SelectorError(f"Unterminated string starting at position {start}")
         inner = self._src[inner_start : self._i]
         self._i += 1
-        return _Tok(_TokType.STRING, self._src[start : self._i], _unescape_string(inner))
+        return _Tok(
+            _TokType.STRING, self._src[start : self._i], _unescape_string(inner)
+        )
 
     def _read_number(self) -> _Tok:
         start = self._i
@@ -678,7 +682,8 @@ def _normalize_type_annotation(ann: str | None) -> str | None:
     while len(s) >= 2 and s.startswith("(") and s.endswith(")"):
         s = s[1:-1].strip()
     if len(s) >= 2 and (
-        (s.startswith('"') and s.endswith('"')) or (s.startswith("'") and s.endswith("'"))
+        (s.startswith('"') and s.endswith('"'))
+        or (s.startswith("'") and s.endswith("'"))
     ):
         if s.startswith('"'):
             from .parser import _decode_quoted
@@ -699,7 +704,9 @@ class SelectorMatcher:
     def _type_annotations_match(actual: str | None, expected: str | None) -> bool:
         if actual is None or expected is None:
             return False
-        return _normalize_type_annotation(actual) == _normalize_type_annotation(expected)
+        return _normalize_type_annotation(actual) == _normalize_type_annotation(
+            expected
+        )
 
     def match(self, selector: SelectorList) -> list[KdlNode]:
         results: list[KdlNode] = []
@@ -763,7 +770,9 @@ class SelectorMatcher:
         if comb == Combinator.DESCENDANT:
             cur = None if current is boundary else self._ctx.parent_of(current)
             while cur is not None and cur is not boundary:
-                if self._matches_compound(cur, target) and self._matches_chain_from_right(
+                if self._matches_compound(
+                    cur, target
+                ) and self._matches_chain_from_right(
                     cur, sel, comb_idx - 1, boundary, allowed_first
                 ):
                     return True
@@ -793,7 +802,9 @@ class SelectorMatcher:
             siblings = self._ctx.siblings_of(current)
             for j in range(idx - 1, -1, -1):
                 prev = siblings[j]
-                if self._matches_compound(prev, target) and self._matches_chain_from_right(
+                if self._matches_compound(
+                    prev, target
+                ) and self._matches_chain_from_right(
                     prev, sel, comb_idx - 1, boundary, allowed_first
                 ):
                     return True
@@ -816,7 +827,9 @@ class SelectorMatcher:
         if sel.name is not None and node.name != sel.name:
             return False
         if sel.type_annotation is not None:
-            return self._type_annotations_match(node.type_annotation, sel.type_annotation)
+            return self._type_annotations_match(
+                node.type_annotation, sel.type_annotation
+            )
         return True
 
     def _matches_filter(self, node: KdlNode, filt: AttributeFilter) -> bool:
@@ -835,9 +848,8 @@ class SelectorMatcher:
         if key not in node.properties:
             return False
         kv = node.properties[key]
-        if (
-            filt.type_annotation is not None
-            and not self._type_annotations_match(kv.type_annotation, filt.type_annotation)
+        if filt.type_annotation is not None and not self._type_annotations_match(
+            kv.type_annotation, filt.type_annotation
         ):
             return False
         if filt.op == "exists":
@@ -850,9 +862,8 @@ class SelectorMatcher:
         if idx < 0 or idx >= len(node.args):
             return False
         kv = node.args[idx]
-        if (
-            filt.type_annotation is not None
-            and not self._type_annotations_match(kv.type_annotation, filt.type_annotation)
+        if filt.type_annotation is not None and not self._type_annotations_match(
+            kv.type_annotation, filt.type_annotation
         ):
             return False
         if filt.op == "exists":
@@ -934,7 +945,9 @@ class SelectorMatcher:
                 allowed_first: set[int] | None = None
             else:
                 matched_children = [
-                    c for c in node.children if self._matches_compound(c, sel.compounds[0])
+                    c
+                    for c in node.children
+                    if self._matches_compound(c, sel.compounds[0])
                 ]
                 if not matched_children:
                     return False
@@ -979,7 +992,11 @@ class SelectorMatcher:
             last_comb_idx = len(sel.combinators) - 1
             for s in siblings[idx + 1 :]:
                 if self._matches_compound(s, last) and self._matches_chain_from_right(
-                    s, sel, last_comb_idx, boundary=boundary, allowed_first=allowed_first
+                    s,
+                    sel,
+                    last_comb_idx,
+                    boundary=boundary,
+                    allowed_first=allowed_first,
                 ):
                     return True
                 for desc in s.iter_descendants():

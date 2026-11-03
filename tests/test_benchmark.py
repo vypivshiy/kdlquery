@@ -61,7 +61,9 @@ class TestParserPerformanceBenchmarks:
         In an O(N) linear implementation, time-per-byte remains approximately constant.
         """
         sizes = [20_000, 100_000, 500_000]
-        timings: list[tuple[int, float, float]] = []  # (actual_bytes, elapsed_sec, time_per_byte)
+        timings: list[
+            tuple[int, float, float]
+        ] = []  # (actual_bytes, elapsed_sec, time_per_byte)
 
         for target in sizes:
             doc = _generate_synthetic_kdl(target)

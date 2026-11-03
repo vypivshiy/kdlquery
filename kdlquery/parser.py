@@ -3,7 +3,7 @@ from __future__ import annotations
 from bisect import bisect_right
 import math
 import re
-from typing import Any, Generic, NamedTuple, TypeVar, overload
+from typing import Any, Generic, NamedTuple, TypeVar, cast, overload
 
 from .builder import (
     AstBuilder,
@@ -59,9 +59,7 @@ _UNICODE_SPACES: frozenset[str] = frozenset(
         "\u3000",
     }
 )
-_UNICODE_SPACES_STR = (
-    "\t \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u202f\u205f\u3000"
-)
+_UNICODE_SPACES_STR = "\t \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u202f\u205f\u3000"
 
 _DISALLOWED_IDENT_CHARS: frozenset[str] = frozenset('\\/(){};[]"=#')
 
@@ -157,20 +155,14 @@ _NEWLINE_PATTERN = r"\r\n|[\n\r\u0085\u000b\u000c\u2028\u2029]"
 _SLASHDASH_PATTERN = r"/-"
 _DELIM_PATTERN = r"[{}()=;]"
 _LINE_COMMENT_PATTERN = r"//[^\n\r\u0085\u000b\u000c\u2028\u2029]*"
-_STRING_PATTERN = (
-    r'"(?!"")(?:[^"\\\n\r\u0085\u000b\u000c\u2028\u2029]|\\[^\n\r\u0085\u000b\u000c\u2028\u2029])*"'
-)
+_STRING_PATTERN = r'"(?!"")(?:[^"\\\n\r\u0085\u000b\u000c\u2028\u2029]|\\[^\n\r\u0085\u000b\u000c\u2028\u2029])*"'
 _HEX_PATTERN = r"[+-]?0[xX][0-9a-fA-F][0-9a-fA-F_]*"
 _OCT_PATTERN = r"[+-]?0[oO][0-7][0-7_]*"
 _BIN_PATTERN = r"[+-]?0[bB][01][01_]*"
-_DECIMAL_PATTERN = (
-    r"[+-]?[0-9][0-9_]*(?:\.[0-9][0-9_]*)?(?:[eE][+-]?[0-9][0-9_]*)?"
-)
+_DECIMAL_PATTERN = r"[+-]?[0-9][0-9_]*(?:\.[0-9][0-9_]*)?(?:[eE][+-]?[0-9][0-9_]*)?"
 _HASH_KW_PATTERN = r"#(?:true|false|null|inf|-inf|nan)"
 
-_NON_IDENT_CHARS = (
-    r'\\/(){};\[\]"=\#\t \u00a0\u1680\u2000-\u200a\u202f\u205f\u3000\n\r\u0085\u000b\u000c\u2028\u2029'
-)
+_NON_IDENT_CHARS = r'\\/(){};\[\]"=\#\t \u00a0\u1680\u2000-\u200a\u202f\u205f\u3000\n\r\u0085\u000b\u000c\u2028\u2029'
 _IDENT_CHAR = rf"[^{_NON_IDENT_CHARS}]"
 _IDENT_PATTERN = (
     rf"(?:[^0-9+\-.{_NON_IDENT_CHARS}]|\.(?![0-9])|[+-](?![0-9]|\.[0-9])){_IDENT_CHAR}*"
@@ -242,9 +234,7 @@ def _parse_number(raw: str, group: str) -> int | float:
     return int(norm)
 
 
-_WS_ESCAPE_CLASS = (
-    r"[\t \u00a0\u1680\u2000-\u200a\u202f\u205f\u3000\n\r\u0085\u000b\u000c\u2028\u2029]"
-)
+_WS_ESCAPE_CLASS = r"[\t \u00a0\u1680\u2000-\u200a\u202f\u205f\u3000\n\r\u0085\u000b\u000c\u2028\u2029]"
 _ESCAPE_RE = re.compile(
     r"\\(?:([nrtbf\"\\s])|u\{([^}]*)\}|(" + _WS_ESCAPE_CLASS + r"+)|(u\{.*)|(.|$))",
     re.DOTALL,
@@ -900,7 +890,6 @@ class KDLLexer:
         )
 
 
-
 class KDL2CSTParser:
     def parse(self, source: str) -> CSTDocument:
         lexer = KDLLexer(source)
@@ -963,7 +952,7 @@ class _Parser(Generic[T]):
         if tokens and isinstance(tokens[0], Token):
             adapted_tokens: list[RawToken] = []
             offset_map: dict[int, Position] = {}
-            for t in tokens:  # type: ignore[union-attr]
+            for t in tokens:
                 adapted_tokens.append(
                     RawToken(
                         t.typ,
@@ -978,7 +967,7 @@ class _Parser(Generic[T]):
             self.tokens: list[RawToken] = adapted_tokens
             self._offset_map = offset_map
         else:
-            self.tokens = tokens  # type: ignore[assignment]
+            self.tokens = cast(list[RawToken], tokens)
 
         if line_starts is not None:
             self._line_starts: list[int] | None = line_starts
@@ -1186,9 +1175,7 @@ class _Parser(Generic[T]):
         if is_null:
             node_span = _EMPTY_SPAN
         elif is_ast:
-            end_offset = (
-                self._prev().end_offset if self.i > 0 else name_tok.end_offset
-            )
+            end_offset = self._prev().end_offset if self.i > 0 else name_tok.end_offset
             node_span = self._span(node_start_offset, end_offset)
         else:
             end_pos = (
@@ -1377,7 +1364,9 @@ class _Parser(Generic[T]):
             return self._peek()
         return self.tokens[self.i - 1]
 
-    def _error_tok(self, tok: RawToken, message: str, *, code: str = "") -> KDLParseError:
+    def _error_tok(
+        self, tok: RawToken, message: str, *, code: str = ""
+    ) -> KDLParseError:
         pos = self._pos(tok.start_offset)
         return KDLParseError(
             message,

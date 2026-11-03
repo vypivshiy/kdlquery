@@ -51,9 +51,7 @@ def parse(source: str) -> KdlDocument:
     lexer = KDLLexer(source)
     tokens = lexer.tokenize_raw()
     builder = AstBuilder()
-    p = _Parser(
-        tokens, source=source, builder=builder, line_starts=lexer._line_starts
-    )
+    p = _Parser(tokens, source=source, builder=builder, line_starts=lexer._line_starts)
     return p.parse_document()
 
 

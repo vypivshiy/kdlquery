@@ -533,7 +533,9 @@ class TestSerializerRegexFastPaths:
             assert _is_bare_ident(reserved) is False
         for num_like in ("0", "42", "-1", "+1", ".5", "-.5", "+.5", "-9abc"):
             assert _is_bare_ident(num_like) is False
-        for ch in '\\/(){};[]"=# \t\n\r\u0085\u00a0\u200e\u202e\u2066\ufeff\x00\x07\x7f\ud800':
+        for ch in (
+            '\\/(){};[]"=# \t\n\r\u0085\u00a0\u200e\u202e\u2066\ufeff\x00\x07\x7f\ud800'
+        ):
             assert _is_bare_ident(f"a{ch}b") is False
             assert _is_bare_ident(ch) is False
 
@@ -554,7 +556,9 @@ class TestSerializerRegexFastPaths:
         ml_clean = _serialize_multiline("line 1\n\nline 2", depth=0, indent_str="    ")
         assert ml_clean == '"""\n    line 1\n\n    line 2\n"""'
 
-        ml_esc = _serialize_multiline('quote " and \x07 and \ufeff', depth=1, indent_str="  ")
+        ml_esc = _serialize_multiline(
+            'quote " and \x07 and \ufeff', depth=1, indent_str="  "
+        )
         assert ml_esc == '"""\n    quote \\" and \\u{7} and \\u{FEFF}\n  """'
 
         with pytest.raises(ValueError, match="surrogate"):

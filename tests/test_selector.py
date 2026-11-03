@@ -890,7 +890,7 @@ class TestQuotedNodeSelectors:
 
     def test_nested_quotes_in_node_names(self, qdoc: KdlDocument) -> None:
         assert _first_args(qdoc.select('"has\'single"')) == ["single_quote"]
-        assert _first_args(qdoc.select('\'has"double\'')) == ["double_quote"]
+        assert _first_args(qdoc.select("'has\"double'")) == ["double_quote"]
 
     def test_combinator_and_selector_list_with_quotes(self, qdoc: KdlDocument) -> None:
         # Direct child > with quotes, with and without whitespace
@@ -907,9 +907,13 @@ class TestQuotedNodeSelectors:
         assert _first_args(r2) == ["special"]
 
     def test_pseudo_classes_with_quotes(self, qdoc: KdlDocument) -> None:
-        assert _first_args(qdoc.select('"service:web":not("service:api")')) == ["frontend"]
+        assert _first_args(qdoc.select('"service:web":not("service:api")')) == [
+            "frontend"
+        ]
         assert qdoc.select('"service:api":not("service:api")') == []
-        assert _first_args(qdoc.select('"service:web":has("child>item")')) == ["frontend"]
+        assert _first_args(qdoc.select('"service:web":has("child>item")')) == [
+            "frontend"
+        ]
         assert _first_args(qdoc.select('"service:web":has(> "a>b")')) == ["frontend"]
         assert qdoc.select('"service:web":has(> "child>item")') == []
 
@@ -988,12 +992,16 @@ class TestEscapedIdentifiers:
             (r"ns\:service", "ns:service", 90),
             (r"complex\>a\+b\~c\,d\:e", "complex>a+b~c,d:e", 100),
             (r"has\\backslash", r"has\backslash", 110),
-            (r'has\"quote', 'has"quote', 120),
+            (r"has\"quote", 'has"quote', 120),
             (r"hello\ world", "hello world", 140),
         ],
     )
     def test_escaped_identifiers(
-        self, escaped_doc: KdlDocument, pattern: str, expected_name: str, expected_first_arg: object
+        self,
+        escaped_doc: KdlDocument,
+        pattern: str,
+        expected_name: str,
+        expected_first_arg: object,
     ) -> None:
         r = escaped_doc.select(pattern)
         assert _names(r) == [expected_name]
@@ -1071,15 +1079,21 @@ def typed_doc() -> KdlDocument:
 
 class TestDisambiguatedTypeAnnotations:
     def test_quoted_type_on_node(self, typed_doc: KdlDocument) -> None:
-        assert _first_args(typed_doc.select('("my/custom:type")service')) == ["srv_quoted"]
-        assert _first_args(typed_doc.select("('my/custom:type')service")) == ["srv_quoted"]
+        assert _first_args(typed_doc.select('("my/custom:type")service')) == [
+            "srv_quoted"
+        ]
+        assert _first_args(typed_doc.select("('my/custom:type')service")) == [
+            "srv_quoted"
+        ]
         assert _first_args(typed_doc.select('("my/custom:type")')) == ["srv_quoted"]
         assert _first_args(typed_doc.select('("my/custom:type")*')) == ["srv_quoted"]
         assert _first_args(typed_doc.select('("custom:v1")service')) == ["srv_unquoted"]
         assert _first_args(typed_doc.select("('custom:v1')service")) == ["srv_unquoted"]
 
     def test_escaped_type_on_node(self, typed_doc: KdlDocument) -> None:
-        assert _first_args(typed_doc.select(r"(my\/custom\:type)service")) == ["srv_quoted"]
+        assert _first_args(typed_doc.select(r"(my\/custom\:type)service")) == [
+            "srv_quoted"
+        ]
         assert _first_args(typed_doc.select(r"(my\/custom\:type)")) == ["srv_quoted"]
         assert _first_args(typed_doc.select(r"(my\/custom\:type)*")) == ["srv_quoted"]
         assert _first_args(typed_doc.select(r"(custom\:v1)service")) == ["srv_unquoted"]
@@ -1089,17 +1103,29 @@ class TestDisambiguatedTypeAnnotations:
         assert _first_args(typed_doc.select('("a+b")node_plus')) == ["plus_node"]
         assert _first_args(typed_doc.select('("a~b")node_tilde')) == ["tilde_node"]
         assert _first_args(typed_doc.select('("a,b")node_comma')) == ["comma_node"]
-        assert _first_args(typed_doc.select('("spaced type")node_space')) == ["space_node"]
+        assert _first_args(typed_doc.select('("spaced type")node_space')) == [
+            "space_node"
+        ]
         assert _first_args(typed_doc.select(r"(a\>b)node_gt")) == ["gt_node"]
-        assert _first_args(typed_doc.select(r"(spaced\ type)node_space")) == ["space_node"]
-
+        assert _first_args(typed_doc.select(r"(spaced\ type)node_space")) == [
+            "space_node"
+        ]
 
     def test_property_type_filters(self, typed_doc: KdlDocument) -> None:
         # Double quoted, single quoted, and escaped in property filter
-        assert _first_args(typed_doc.select('service[("u:16")port=8080]')) == ["srv_quoted"]
-        assert _first_args(typed_doc.select("service[('u:16')port=8080]")) == ["srv_quoted"]
-        assert _first_args(typed_doc.select(r"service[(u\:16)port=8080]")) == ["srv_quoted"]
-        assert _first_args(typed_doc.select('service[("u:16")port]')) == ["srv_quoted", "srv_unquoted"]
+        assert _first_args(typed_doc.select('service[("u:16")port=8080]')) == [
+            "srv_quoted"
+        ]
+        assert _first_args(typed_doc.select("service[('u:16')port=8080]")) == [
+            "srv_quoted"
+        ]
+        assert _first_args(typed_doc.select(r"service[(u\:16)port=8080]")) == [
+            "srv_quoted"
+        ]
+        assert _first_args(typed_doc.select('service[("u:16")port]')) == [
+            "srv_quoted",
+            "srv_unquoted",
+        ]
         assert typed_doc.select('service[("i32")port]') == []
         assert typed_doc.select('untyped_node[("u:16")port]') == []
 
@@ -1111,11 +1137,18 @@ class TestDisambiguatedTypeAnnotations:
         assert _first_args(typed_doc.select('app[("u:16")1]')) == ["app1"]
         assert typed_doc.select('app[("i32")1=100]') == []
 
-
     def test_combinator_and_pseudos_with_types(self, typed_doc: KdlDocument) -> None:
-        assert _first_args(typed_doc.select('("my/custom:type")service > ("child/nested:type")worker')) == ["w1"]
-        assert _first_args(typed_doc.select('("my/custom:type")service:has(("child/nested:type")worker)')) == ["srv_quoted"]
-        assert _first_args(typed_doc.select('("my/custom:type")service:not(("custom:v1")service)')) == ["srv_quoted"]
+        assert _first_args(
+            typed_doc.select('("my/custom:type")service > ("child/nested:type")worker')
+        ) == ["w1"]
+        assert _first_args(
+            typed_doc.select(
+                '("my/custom:type")service:has(("child/nested:type")worker)'
+            )
+        ) == ["srv_quoted"]
+        assert _first_args(
+            typed_doc.select('("my/custom:type")service:not(("custom:v1")service)')
+        ) == ["srv_quoted"]
 
     def test_synthetic_node_matching(self) -> None:
         # Node created with unparenthesized type annotation
@@ -1140,14 +1173,22 @@ class TestDisambiguatedTypeAnnotations:
 class TestDisambiguatedTypeAnnotationsErrors:
     @pytest.mark.parametrize(
         "pattern",
-        ['("unterminated)node', "('unterminated)node", 'node[("unterminated)port=8080]'],
+        [
+            '("unterminated)node',
+            "('unterminated)node",
+            'node[("unterminated)port=8080]',
+        ],
     )
-    def test_unterminated_string_in_type_annotation(self, typed_doc: KdlDocument, pattern: str) -> None:
+    def test_unterminated_string_in_type_annotation(
+        self, typed_doc: KdlDocument, pattern: str
+    ) -> None:
         with pytest.raises(SelectorError, match="Unterminated string"):
             typed_doc.select(pattern)
 
     @pytest.mark.parametrize("pattern", ["(foo\\", "node[(foo\\"])
-    def test_unterminated_escape_in_type_annotation(self, typed_doc: KdlDocument, pattern: str) -> None:
+    def test_unterminated_escape_in_type_annotation(
+        self, typed_doc: KdlDocument, pattern: str
+    ) -> None:
         with pytest.raises(SelectorError, match="Unterminated escape sequence"):
             typed_doc.select(pattern)
 
@@ -1157,11 +1198,15 @@ class TestDisambiguatedTypeAnnotationsErrors:
         with pytest.raises(SelectorError, match="Expected RPAREN"):
             typed_doc.select(r"(unterminated\)node")
 
-    @pytest.mark.parametrize("pattern", ["()node", "node[()port=8080]", "(=)node", "(>)node"])
+    @pytest.mark.parametrize(
+        "pattern", ["()node", "node[()port=8080]", "(=)node", "(>)node"]
+    )
     def test_invalid_type_annotation_raises_selector_error(
         self, typed_doc: KdlDocument, pattern: str
     ) -> None:
-        with pytest.raises(SelectorError, match="Expected type annotation identifier or string"):
+        with pytest.raises(
+            SelectorError, match="Expected type annotation identifier or string"
+        ):
             typed_doc.select(pattern)
 
     def test_missing_rparen_raises_selector_error(self, typed_doc: KdlDocument) -> None:
@@ -1196,50 +1241,86 @@ def attr_doc() -> KdlDocument:
 
 class TestDisambiguatedAttributeKeys:
     def test_quoted_property_keys(self, attr_doc: KdlDocument) -> None:
-        assert _first_args(attr_doc.select('service["app.name"="api-gateway"]')) == ["my-app"]
-        assert _first_args(attr_doc.select("service['app.name'='api-gateway']")) == ["my-app"]
-        assert _first_args(attr_doc.select('service[\'app.name\'="api-gateway"]')) == ["my-app"]
-        assert _first_args(attr_doc.select("service[\"app.name\"='api-gateway']")) == ["my-app"]
+        assert _first_args(attr_doc.select('service["app.name"="api-gateway"]')) == [
+            "my-app"
+        ]
+        assert _first_args(attr_doc.select("service['app.name'='api-gateway']")) == [
+            "my-app"
+        ]
+        assert _first_args(attr_doc.select("service['app.name'=\"api-gateway\"]")) == [
+            "my-app"
+        ]
+        assert _first_args(attr_doc.select("service[\"app.name\"='api-gateway']")) == [
+            "my-app"
+        ]
         # Special characters in quoted keys
         assert _first_args(attr_doc.select('service["foo:bar"="baz"]')) == ["my-app"]
         assert _first_args(attr_doc.select('service["a>b"="gt_val"]')) == ["my-app"]
         assert _first_args(attr_doc.select('service["c+d"="plus_val"]')) == ["my-app"]
         assert _first_args(attr_doc.select('service["x~y"="tilde_val"]')) == ["my-app"]
         assert _first_args(attr_doc.select('service["a,b"="comma_val"]')) == ["my-app"]
-        assert _first_args(attr_doc.select('service["nested[key]"="bracket_val"]')) == ["my-app"]
-        assert _first_args(attr_doc.select('service["spaced key"="space_val"]')) == ["my-app"]
-        assert _first_args(attr_doc.select('service["has\'single"="single_quote_val"]')) == ["my-app"]
-        assert _first_args(attr_doc.select("service['has\"double'='double_quote_val']")) == ["my-app"]
+        assert _first_args(attr_doc.select('service["nested[key]"="bracket_val"]')) == [
+            "my-app"
+        ]
+        assert _first_args(attr_doc.select('service["spaced key"="space_val"]')) == [
+            "my-app"
+        ]
+        assert _first_args(
+            attr_doc.select('service["has\'single"="single_quote_val"]')
+        ) == ["my-app"]
+        assert _first_args(
+            attr_doc.select("service['has\"double'='double_quote_val']")
+        ) == ["my-app"]
         # Operators and existence
         assert _first_args(attr_doc.select('service["app.name"^="api"]')) == ["my-app"]
-        assert _first_args(attr_doc.select('service["app.name"$="client"]')) == ["secondary"]
+        assert _first_args(attr_doc.select('service["app.name"$="client"]')) == [
+            "secondary"
+        ]
         assert _first_args(attr_doc.select('service["app.name"~="gate"]')) == ["my-app"]
-        assert _first_args(attr_doc.select('service["app.name"]')) == ["my-app", "secondary"]
+        assert _first_args(attr_doc.select('service["app.name"]')) == [
+            "my-app",
+            "secondary",
+        ]
         assert _first_args(attr_doc.select('service["nonexistent"]')) == []
 
     def test_escaped_property_keys(self, attr_doc: KdlDocument) -> None:
-        assert _first_args(attr_doc.select(r'service[app\.name="api-gateway"]')) == ["my-app"]
+        assert _first_args(attr_doc.select(r'service[app\.name="api-gateway"]')) == [
+            "my-app"
+        ]
         assert _first_args(attr_doc.select(r'service[foo\:bar="baz"]')) == ["my-app"]
         assert _first_args(attr_doc.select(r'service[a\>b="gt_val"]')) == ["my-app"]
         assert _first_args(attr_doc.select(r'service[c\+d="plus_val"]')) == ["my-app"]
         assert _first_args(attr_doc.select(r'service[x\~y="tilde_val"]')) == ["my-app"]
         assert _first_args(attr_doc.select(r'service[a\,b="comma_val"]')) == ["my-app"]
-        assert _first_args(attr_doc.select(r'service[nested\[key\]="bracket_val"]')) == ["my-app"]
-        assert _first_args(attr_doc.select(r'service[spaced\ key="space_val"]')) == ["my-app"]
+        assert _first_args(
+            attr_doc.select(r'service[nested\[key\]="bracket_val"]')
+        ) == ["my-app"]
+        assert _first_args(attr_doc.select(r'service[spaced\ key="space_val"]')) == [
+            "my-app"
+        ]
         assert _first_args(attr_doc.select(r'service[\0="prop_zero"]')) == ["my-app"]
         # Operators and existence
         assert _first_args(attr_doc.select(r'service[app\.name^="api"]')) == ["my-app"]
-        assert _first_args(attr_doc.select(r"service[app\.name]")) == ["my-app", "secondary"]
+        assert _first_args(attr_doc.select(r"service[app\.name]")) == [
+            "my-app",
+            "secondary",
+        ]
 
-    def test_combinator_and_pseudos_with_disambiguated_keys(self, attr_doc: KdlDocument) -> None:
-        r1 = attr_doc.select('service["app.name"="api-gateway"] > route["api.version"="v1"]')
+    def test_combinator_and_pseudos_with_disambiguated_keys(
+        self, attr_doc: KdlDocument
+    ) -> None:
+        r1 = attr_doc.select(
+            'service["app.name"="api-gateway"] > route["api.version"="v1"]'
+        )
         assert [n.get_arg(0) for n in r1] == ["/users"]
         r2 = attr_doc.select(r'service:not([foo\:bar="qux"])')
         assert _first_args(r2) == ["my-app"]
         r3 = attr_doc.select('service:has(> route["api.version"="v2"])')
         assert _first_args(r3) == ["my-app"]
 
-    def test_kdl_node_matches_with_disambiguated_keys(self, attr_doc: KdlDocument) -> None:
+    def test_kdl_node_matches_with_disambiguated_keys(
+        self, attr_doc: KdlDocument
+    ) -> None:
         srv = attr_doc.select_one('service[0="my-app"]')
         assert srv is not None
         assert srv.matches('service[0="my-app"]') is True
@@ -1251,12 +1332,16 @@ class TestDisambiguatedAttributeKeys:
 
 
 class TestPositionalArgumentVsNumericPropertyKey:
-    def test_unquoted_number_matches_positional_arg_0(self, attr_doc: KdlDocument) -> None:
+    def test_unquoted_number_matches_positional_arg_0(
+        self, attr_doc: KdlDocument
+    ) -> None:
         assert _first_args(attr_doc.select('service[0="my-app"]')) == ["my-app"]
         assert _first_args(attr_doc.select('service[0="secondary"]')) == ["secondary"]
         assert _first_args(attr_doc.select('service[0="prop_zero"]')) == []
 
-    def test_quoted_number_matches_property_with_string_key(self, attr_doc: KdlDocument) -> None:
+    def test_quoted_number_matches_property_with_string_key(
+        self, attr_doc: KdlDocument
+    ) -> None:
         assert _first_args(attr_doc.select('service["0"="prop_zero"]')) == ["my-app"]
         assert _first_args(attr_doc.select("service['0'='prop_zero']")) == ["my-app"]
         assert _first_args(attr_doc.select('service["0"="sec_zero"]')) == ["secondary"]
@@ -1295,7 +1380,9 @@ class TestPositionalArgumentVsNumericPropertyKey:
 
 
 class TestDisambiguatedAttributeKeysErrors:
-    @pytest.mark.parametrize("pattern", ['service["unterminated]', "service['unterminated]"])
+    @pytest.mark.parametrize(
+        "pattern", ['service["unterminated]', "service['unterminated]"]
+    )
     def test_unterminated_quote_key(self, attr_doc: KdlDocument, pattern: str) -> None:
         with pytest.raises(SelectorError, match="Unterminated string"):
             attr_doc.select(pattern)
@@ -1328,7 +1415,9 @@ class TestHasComplexAndSiblings:
     def test_has_descendant_complex_chain(self, doc: KdlDocument) -> None:
         assert _names(doc.select("app:has(server > host)")) == ["app"]
         assert _names(doc.select("app:has(plugin > backend)")) == ["app"]
-        assert _names(doc.select('plugins:has(plugin[0="cache"] > backend)')) == ["plugins"]
+        assert _names(doc.select('plugins:has(plugin[0="cache"] > backend)')) == [
+            "plugins"
+        ]
         assert doc.select('plugins:has(plugin[0="auth"] > backend)') == []
 
     def test_has_subtree_boundary_excludes_self_and_ancestors(
@@ -1358,8 +1447,12 @@ class TestHasComplexAndSiblings:
         assert _first_args(nested_doc.select("box:has(item)")) == ["outer", "inner"]
 
     def test_has_internal_sibling_combinators(self, doc: KdlDocument) -> None:
-        assert _names(doc.select('router:has(route[0="GET"] + route[0="POST"])')) == ["router"]
-        assert _names(doc.select('router:has(> route[0="GET"] + route[0="POST"])')) == ["router"]
+        assert _names(doc.select('router:has(route[0="GET"] + route[0="POST"])')) == [
+            "router"
+        ]
+        assert _names(doc.select('router:has(> route[0="GET"] + route[0="POST"])')) == [
+            "router"
+        ]
         assert doc.select('router:has(route[0="POST"] + route[0="POST"])') == []
         assert _names(
             doc.select('plugins:has(> plugin[0="auth"] ~ plugin[enabled=#false])')
@@ -1367,7 +1460,10 @@ class TestHasComplexAndSiblings:
         # Only primary server has two adjacent `host` children
         assert _first_args(doc.select("server:has(host + host)")) == ["primary"]
         assert _first_args(doc.select("server:has(> host + host)")) == ["primary"]
-        assert _first_args(doc.select("server:has(host + timeout)")) == ["primary", "replica"]
+        assert _first_args(doc.select("server:has(host + timeout)")) == [
+            "primary",
+            "replica",
+        ]
 
     def test_has_leading_adjacent_sibling(self, doc: KdlDocument) -> None:
         r = doc.select('route:has(+ route[0="POST"])')
@@ -1390,7 +1486,9 @@ class TestHasComplexAndSiblings:
             "/api/health",
         ]
 
-    def test_has_leading_sibling_with_complex_subselector(self, doc: KdlDocument) -> None:
+    def test_has_leading_sibling_with_complex_subselector(
+        self, doc: KdlDocument
+    ) -> None:
         r = doc.select('server:has(+ server[0="replica"] > host[0="replica.local"])')
         assert _first_args(r) == ["primary"]
 
@@ -1439,7 +1537,10 @@ def lit_doc() -> KdlDocument:
 
 class TestLiteralsAndSignedNumbers:
     def test_negative_int_property_and_arg(self, lit_doc: KdlDocument) -> None:
-        assert _first_args(lit_doc.select("node[offset=-5]")) == ["neg_int", "typed_neg"]
+        assert _first_args(lit_doc.select("node[offset=-5]")) == [
+            "neg_int",
+            "typed_neg",
+        ]
         assert _first_args(lit_doc.select("node[step=-10]")) == ["neg_int"]
         assert _first_args(lit_doc.select("node[1=-5]")) == ["neg_int"]
         assert _first_args(lit_doc.select("node[*=-5]")) == ["neg_int"]
@@ -1475,8 +1576,12 @@ class TestLiteralsAndSignedNumbers:
         assert _first_args(lit_doc.select("node[1=#nan]")) == ["nan_val"]
         assert _first_args(lit_doc.select("node[*=#nan]")) == ["nan_val"]
 
-    @pytest.mark.parametrize("pattern", ["node[val=#invalid]", "node[val=#nullish]", "node[val=#infinity]"])
-    def test_invalid_hash_keyword_raises(self, lit_doc: KdlDocument, pattern: str) -> None:
+    @pytest.mark.parametrize(
+        "pattern", ["node[val=#invalid]", "node[val=#nullish]", "node[val=#infinity]"]
+    )
+    def test_invalid_hash_keyword_raises(
+        self, lit_doc: KdlDocument, pattern: str
+    ) -> None:
         with pytest.raises(SelectorError):
             lit_doc.select(pattern)
 
@@ -1529,9 +1634,13 @@ class TestNthChildExtended:
         ]
 
     def test_nth_child_spaced_and_negative_offsets(self, doc: KdlDocument) -> None:
-        assert doc.select("route:nth-child(-n + 3)") == doc.select("route:nth-child(-n+3)")
+        assert doc.select("route:nth-child(-n + 3)") == doc.select(
+            "route:nth-child(-n+3)"
+        )
         assert doc.select("route:nth-child(2n-1)") == doc.select("route:nth-child(odd)")
-        assert doc.select("route:nth-child(2n - 1)") == doc.select("route:nth-child(odd)")
+        assert doc.select("route:nth-child(2n - 1)") == doc.select(
+            "route:nth-child(odd)"
+        )
         assert doc.select("route:nth-child(-n)") == []
         assert doc.select("route:nth-child(-n-1)") == []
 
@@ -1546,6 +1655,3 @@ class TestNthChildExtended:
     def test_invalid_nth_child_raises(self, doc: KdlDocument, pattern: str) -> None:
         with pytest.raises(SelectorError):
             doc.select(pattern)
-
-
-

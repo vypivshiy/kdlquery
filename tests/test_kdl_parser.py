@@ -391,24 +391,18 @@ endpoint name="service" \\
         assert exc2.value.code == "escline-comment-continuation"
 
         # Block comments across continuation are allowed and work as node-space
-        doc_block = KDL2CSTParser().parse(
-            "node \\\n    /* comment */ \\\n    arg\n"
-        )
+        doc_block = KDL2CSTParser().parse("node \\\n    /* comment */ \\\n    arg\n")
         assert len(doc_block.nodes) == 1
         assert doc_block.nodes[0].name.value == "node"
         assert len(doc_block.nodes[0].entries) == 1
 
-        doc_block2 = KDL2CSTParser().parse(
-            "node \\\n    /* comment */ arg\n"
-        )
+        doc_block2 = KDL2CSTParser().parse("node \\\n    /* comment */ arg\n")
         assert len(doc_block2.nodes) == 1
         assert doc_block2.nodes[0].name.value == "node"
         assert len(doc_block2.nodes[0].entries) == 1
 
         # Same-line single-line comments remain valid KDL 2.0
-        doc_sameline = KDL2CSTParser().parse(
-            "node \\ // same-line comment\n    arg\n"
-        )
+        doc_sameline = KDL2CSTParser().parse("node \\ // same-line comment\n    arg\n")
         assert len(doc_sameline.nodes) == 1
         assert doc_sameline.nodes[0].name.value == "node"
         assert len(doc_sameline.nodes[0].entries) == 1
@@ -460,9 +454,9 @@ def test_build_line_starts() -> None:
     assert _build_line_starts("") == [0]
     assert _build_line_starts("node 1") == [0]
     assert _build_line_starts("a\nb\r\nc\rd") == [0, 2, 5, 7]
-    assert _build_line_starts("line1\u0085line2\u000bline3\u000cline4\u2028line5\u2029line6") == [
-        0, 6, 12, 18, 24, 30
-    ]
+    assert _build_line_starts(
+        "line1\u0085line2\u000bline3\u000cline4\u2028line5\u2029line6"
+    ) == [0, 6, 12, 18, 24, 30]
 
 
 def test_offset_to_position_mapping() -> None:
@@ -605,12 +599,16 @@ def test_master_regex_high_frequency_tokens() -> None:
 
 def test_multihash_raw_and_multiline_strings() -> None:
     # Multi-hash raw strings
-    doc1 = KDL2CSTParser().parse('node #"single raw"# ##"double raw"## ###"triple raw"###')
+    doc1 = KDL2CSTParser().parse(
+        'node #"single raw"# ##"double raw"## ###"triple raw"###'
+    )
     values1 = [e.value.value for e in doc1.nodes[0].entries]
     assert values1 == ["single raw", "double raw", "triple raw"]
 
     # Multiline raw strings
-    doc2 = KDL2CSTParser().parse('node #"""\n  multiline raw\n  """# ##"""\n  double ml\n  """##')
+    doc2 = KDL2CSTParser().parse(
+        'node #"""\n  multiline raw\n  """# ##"""\n  double ml\n  """##'
+    )
     values2 = [e.value.value for e in doc2.nodes[0].entries]
     assert values2 == ["multiline raw", "double ml"]
 
@@ -645,10 +643,13 @@ def test_vectorized_escape_decoding() -> None:
     assert _decode_escape_body("plain text") == "plain text"
 
     # All standard escapes
-    assert _decode_escape_body(r"line\nbreak\r\ttab\b\f\\\"space\s") == "line\nbreak\r\ttab\b\f\\\"space "
+    assert (
+        _decode_escape_body(r"line\nbreak\r\ttab\b\f\\\"space\s")
+        == 'line\nbreak\r\ttab\b\f\\"space '
+    )
 
     # Unicode scalar escapes
-    assert _decode_escape_body(r"\u{41}\u{1F600}") == "A\U0001F600"
+    assert _decode_escape_body(r"\u{41}\u{1F600}") == "A\U0001f600"
 
     # Whitespace escapes
     assert _decode_escape_body("hello\\\n    world") == "helloworld"
@@ -662,4 +663,3 @@ def test_vectorized_escape_decoding() -> None:
         _decode_escape_body(r"\u{123")
     with pytest.raises(ValueError, match="Invalid escape sequence"):
         _decode_escape_body(r"\x")
-

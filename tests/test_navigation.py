@@ -122,7 +122,9 @@ class TestNodeDocument:
         node = KdlNode.from_cst(cst.nodes[0])
         assert node.document is None
 
-    def test_remove_child_clears_document_recursively(self, nav_doc: KdlDocument) -> None:
+    def test_remove_child_clears_document_recursively(
+        self, nav_doc: KdlDocument
+    ) -> None:
         app = nav_doc.nodes[0]
         plugins = app.children[3]
         assert plugins.name == "plugins"
