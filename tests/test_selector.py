@@ -1313,3 +1313,239 @@ class TestDisambiguatedAttributeKeysErrors:
             attr_doc.select('service[#true="val"]')
 
 
+# ---------------------------------------------------------------------------
+# :has() complex selectors, boundary enforcement & leading sibling combinators
+# ---------------------------------------------------------------------------
+
+
+class TestHasComplexAndSiblings:
+    def test_has_leading_child_chain(self, doc: KdlDocument) -> None:
+        assert _names(doc.select("app:has(> router > route)")) == ["app"]
+        assert _names(doc.select('app:has(> router > route[0="POST"])')) == ["app"]
+        assert doc.select("app:has(> router > nonexistent)") == []
+        assert doc.select("app:has(> server > route)") == []
+
+    def test_has_descendant_complex_chain(self, doc: KdlDocument) -> None:
+        assert _names(doc.select("app:has(server > host)")) == ["app"]
+        assert _names(doc.select("app:has(plugin > backend)")) == ["app"]
+        assert _names(doc.select('plugins:has(plugin[0="cache"] > backend)')) == ["plugins"]
+        assert doc.select('plugins:has(plugin[0="auth"] > backend)') == []
+
+    def test_has_subtree_boundary_excludes_self_and_ancestors(
+        self, doc: KdlDocument
+    ) -> None:
+        # server itself is the candidate node, so 'server' in 'server > host'
+        # must NOT match the candidate node itself.
+        assert doc.select("server:has(server > host)") == []
+        # app is an ancestor of server, so 'app > server > host' must NOT match on server.
+        assert doc.select("server:has(app > server > host)") == []
+        assert doc.select("router:has(app > router > route)") == []
+
+    def test_has_nested_same_name_boundary(self) -> None:
+        nested_doc = parse(
+            """\
+            box "outer" {
+                box "inner" {
+                    item "leaf"
+                }
+            }
+            """
+        )
+        # Only "outer" has a descendant `box` with a child `item`.
+        assert _first_args(nested_doc.select("box:has(box > item)")) == ["outer"]
+        assert _first_args(nested_doc.select("box:has(> box > item)")) == ["outer"]
+        # Both "outer" and "inner" have a descendant `item`.
+        assert _first_args(nested_doc.select("box:has(item)")) == ["outer", "inner"]
+
+    def test_has_internal_sibling_combinators(self, doc: KdlDocument) -> None:
+        assert _names(doc.select('router:has(route[0="GET"] + route[0="POST"])')) == ["router"]
+        assert _names(doc.select('router:has(> route[0="GET"] + route[0="POST"])')) == ["router"]
+        assert doc.select('router:has(route[0="POST"] + route[0="POST"])') == []
+        assert _names(
+            doc.select('plugins:has(> plugin[0="auth"] ~ plugin[enabled=#false])')
+        ) == ["plugins"]
+        # Only primary server has two adjacent `host` children
+        assert _first_args(doc.select("server:has(host + host)")) == ["primary"]
+        assert _first_args(doc.select("server:has(> host + host)")) == ["primary"]
+        assert _first_args(doc.select("server:has(host + timeout)")) == ["primary", "replica"]
+
+    def test_has_leading_adjacent_sibling(self, doc: KdlDocument) -> None:
+        r = doc.select('route:has(+ route[0="POST"])')
+        assert [(n.get_arg(0), n.get_arg(1)) for n in r] == [("GET", "/api/users")]
+
+        r2 = doc.select("plugin:has(+ plugin[enabled=#false])")
+        assert _first_args(r2) == ["cache"]
+
+        r3 = doc.select("server:has(+ router)")
+        assert _first_args(r3) == ["replica"]
+
+    def test_has_leading_general_sibling(self, doc: KdlDocument) -> None:
+        r = doc.select("plugin:has(~ plugin[enabled=#false])")
+        assert _first_args(r) == ["auth", "cache"]
+
+        r2 = doc.select('route:has(~ route[1="/static/*"])')
+        assert [n.get_arg(1) for n in r2] == [
+            "/api/users",
+            "/api/users",
+            "/api/health",
+        ]
+
+    def test_has_leading_sibling_with_complex_subselector(self, doc: KdlDocument) -> None:
+        r = doc.select('server:has(+ server[0="replica"] > host[0="replica.local"])')
+        assert _first_args(r) == ["primary"]
+
+        r2 = doc.select('server:has(~ plugins > plugin[0="cache"] > backend)')
+        assert _first_args(r2) == ["primary", "replica"]
+
+        r3 = doc.select('plugin:has(+ plugin + plugin[0="debug"])')
+        assert _first_args(r3) == ["auth"]
+
+    def test_has_on_root_siblings_and_node_matches(self, qdoc: KdlDocument) -> None:
+        r_adj = qdoc.select('"top>a":has(+ "top+b")')
+        assert _first_args(r_adj) == ["sibling1"]
+
+        r_gen = qdoc.select('"top>a":has(~ "top~c")')
+        assert _first_args(r_gen) == ["sibling1"]
+
+        top_a = qdoc.select_one('"top>a"')
+        assert top_a is not None
+        assert top_a.matches('"top>a":has(+ "top+b")') is True
+        assert top_a.matches('"top>a":has(+ "top~c")') is False
+        assert top_a.matches('"top>a":has(~ "top~c")') is True
+
+
+# ---------------------------------------------------------------------------
+# Negative numbers & KDL 2.0 keyword literals (#null, #inf, #-inf, #nan)
+# ---------------------------------------------------------------------------
+
+KDL_LITERALS_DOC = """\
+/- kdl-version 2
+
+node "neg_int" -5 offset=-5 step=-10
+node "neg_float" -0.5 delta=-0.5 ratio=-3.14
+node "pos_num" 5 offset=5 delta=0.5
+node "typed_neg" (f64)-0.5 offset=(i32)-5
+node "null_val" #null val=#null
+node "inf_val" #inf val=#inf
+node "ninf_val" #-inf val=#-inf
+node "nan_val" #nan val=#nan
+"""
+
+
+@pytest.fixture()
+def lit_doc() -> KdlDocument:
+    return parse(KDL_LITERALS_DOC)
+
+
+class TestLiteralsAndSignedNumbers:
+    def test_negative_int_property_and_arg(self, lit_doc: KdlDocument) -> None:
+        assert _first_args(lit_doc.select("node[offset=-5]")) == ["neg_int", "typed_neg"]
+        assert _first_args(lit_doc.select("node[step=-10]")) == ["neg_int"]
+        assert _first_args(lit_doc.select("node[1=-5]")) == ["neg_int"]
+        assert _first_args(lit_doc.select("node[*=-5]")) == ["neg_int"]
+        assert _first_args(lit_doc.select("node[(i32)offset=-5]")) == ["typed_neg"]
+
+    def test_negative_float_property_and_arg(self, lit_doc: KdlDocument) -> None:
+        assert _first_args(lit_doc.select("node[delta=-0.5]")) == ["neg_float"]
+        assert _first_args(lit_doc.select("node[ratio=-3.14]")) == ["neg_float"]
+        assert _first_args(lit_doc.select("node[1=-0.5]")) == ["neg_float", "typed_neg"]
+        assert _first_args(lit_doc.select("node[*=-0.5]")) == ["neg_float", "typed_neg"]
+        assert _first_args(lit_doc.select("node[(f64)1=-0.5]")) == ["typed_neg"]
+
+    def test_Explicit_plus_number_property(self, lit_doc: KdlDocument) -> None:
+        assert _first_args(lit_doc.select("node[offset=+5]")) == ["pos_num"]
+        assert _first_args(lit_doc.select("node[delta=+0.5]")) == ["pos_num"]
+
+    def test_null_literal(self, lit_doc: KdlDocument) -> None:
+        assert _first_args(lit_doc.select("node[val=#null]")) == ["null_val"]
+        assert _first_args(lit_doc.select("node[1=#null]")) == ["null_val"]
+        assert _first_args(lit_doc.select("node[*=#null]")) == ["null_val"]
+
+    def test_inf_and_neg_inf_literals(self, lit_doc: KdlDocument) -> None:
+        assert _first_args(lit_doc.select("node[val=#inf]")) == ["inf_val"]
+        assert _first_args(lit_doc.select("node[1=#inf]")) == ["inf_val"]
+        assert _first_args(lit_doc.select("node[*=#inf]")) == ["inf_val"]
+
+        assert _first_args(lit_doc.select("node[val=#-inf]")) == ["ninf_val"]
+        assert _first_args(lit_doc.select("node[1=#-inf]")) == ["ninf_val"]
+        assert _first_args(lit_doc.select("node[*=#-inf]")) == ["ninf_val"]
+
+    def test_nan_literal(self, lit_doc: KdlDocument) -> None:
+        assert _first_args(lit_doc.select("node[val=#nan]")) == ["nan_val"]
+        assert _first_args(lit_doc.select("node[1=#nan]")) == ["nan_val"]
+        assert _first_args(lit_doc.select("node[*=#nan]")) == ["nan_val"]
+
+    @pytest.mark.parametrize("pattern", ["node[val=#invalid]", "node[val=#nullish]", "node[val=#infinity]"])
+    def test_invalid_hash_keyword_raises(self, lit_doc: KdlDocument, pattern: str) -> None:
+        with pytest.raises(SelectorError):
+            lit_doc.select(pattern)
+
+
+# ---------------------------------------------------------------------------
+# Extended :nth-child() expressions (odd, even, negative step)
+# ---------------------------------------------------------------------------
+
+
+class TestNthChildExtended:
+    def test_nth_child_odd(self, doc: KdlDocument) -> None:
+        r = doc.select("route:nth-child(odd)")
+        assert [n.get_arg(1) for n in r] == ["/api/users", "/api/health"]
+
+    def test_nth_child_even(self, doc: KdlDocument) -> None:
+        r = doc.select("route:nth-child(even)")
+        assert [n.get_arg(1) for n in r] == ["/api/users", "/static/*"]
+        assert _first_args(r) == ["POST", "GET"]
+
+    def test_nth_child_negative_n_plus_b(self, doc: KdlDocument) -> None:
+        r3 = doc.select("route:nth-child(-n+3)")
+        assert [(n.get_arg(0), n.get_arg(1)) for n in r3] == [
+            ("GET", "/api/users"),
+            ("POST", "/api/users"),
+            ("GET", "/api/health"),
+        ]
+
+        r2 = doc.select("route:nth-child(-n+2)")
+        assert [(n.get_arg(0), n.get_arg(1)) for n in r2] == [
+            ("GET", "/api/users"),
+            ("POST", "/api/users"),
+        ]
+
+        r1 = doc.select("route:nth-child(-n+1)")
+        assert [(n.get_arg(0), n.get_arg(1)) for n in r1] == [
+            ("GET", "/api/users"),
+        ]
+
+    def test_nth_child_negative_2n_plus_b(self, doc: KdlDocument) -> None:
+        r_even_first4 = doc.select("route:nth-child(-2n+4)")
+        assert [(n.get_arg(0), n.get_arg(1)) for n in r_even_first4] == [
+            ("POST", "/api/users"),
+            ("GET", "/static/*"),
+        ]
+
+        r_odd_first3 = doc.select("route:nth-child(-2n+3)")
+        assert [(n.get_arg(0), n.get_arg(1)) for n in r_odd_first3] == [
+            ("GET", "/api/users"),
+            ("GET", "/api/health"),
+        ]
+
+    def test_nth_child_spaced_and_negative_offsets(self, doc: KdlDocument) -> None:
+        assert doc.select("route:nth-child(-n + 3)") == doc.select("route:nth-child(-n+3)")
+        assert doc.select("route:nth-child(2n-1)") == doc.select("route:nth-child(odd)")
+        assert doc.select("route:nth-child(2n - 1)") == doc.select("route:nth-child(odd)")
+        assert doc.select("route:nth-child(-n)") == []
+        assert doc.select("route:nth-child(-n-1)") == []
+
+    @pytest.mark.parametrize(
+        "pattern",
+        [
+            "route:nth-child(foo)",
+            "route:nth-child(2.5)",
+            "route:nth-child(2n 1)",
+        ],
+    )
+    def test_invalid_nth_child_raises(self, doc: KdlDocument, pattern: str) -> None:
+        with pytest.raises(SelectorError):
+            doc.select(pattern)
+
+
+

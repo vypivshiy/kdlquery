@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import functools
+import math
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Iterator, NamedTuple, Protocol
@@ -72,10 +73,7 @@ class _SingleNodeContext:
         return node.parent
 
     def siblings_of(self, node: KdlNode) -> list[KdlNode]:
-        parent = node.parent
-        if parent is not None:
-            return parent.children
-        return [node]
+        return node.siblings()
 
     def index_of(self, node: KdlNode) -> int:
         siblings = self.siblings_of(node)
@@ -90,13 +88,13 @@ class _SingleNodeContext:
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class NodeSelector:
     name: str | None  # None = wildcard (*)
     type_annotation: str | None
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class AttributeFilter:
     key: str | int  # str = property name, int = arg index
     type_annotation: str | None  # type annotation on the value
@@ -105,13 +103,13 @@ class AttributeFilter:
     wildcard_arg: bool  # True for [*=val]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class NthExpr:
     a: int
     b: int
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class PseudoClass:
     name: str
     nth: NthExpr | None = None
@@ -119,7 +117,7 @@ class PseudoClass:
     has_selectors: tuple[tuple[Combinator | None, ComplexSelector], ...] = ()
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class CompoundSelector:
     node: NodeSelector
     filters: tuple[AttributeFilter, ...]
@@ -133,13 +131,13 @@ class Combinator(str, Enum):
     GENERAL_SIBLING = "~"
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class ComplexSelector:
     compounds: tuple[CompoundSelector, ...]
     combinators: tuple[Combinator, ...]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class SelectorList:
     selectors: tuple[ComplexSelector, ...]
 
@@ -268,7 +266,9 @@ class SelectorLexer:
             return self._read_bool()
         if ch in ('"', "'"):
             return self._read_string(ch)
-        if ch.isdigit():
+        if ch.isdigit() or (
+            ch == "-" and self._i + 1 < len(self._src) and self._src[self._i + 1].isdigit()
+        ):
             return self._read_number()
         if ch == "\\" or (ch not in _SPECIAL and not ch.isspace()):
             return self._read_ident()
@@ -277,12 +277,23 @@ class SelectorLexer:
     def _read_bool(self) -> _Tok:
         start = self._i
         self._i += 1
-        if self._src.startswith("true", self._i):
-            self._i += 4
-            return _Tok(_TokType.BOOL, self._src[start : self._i], True)
-        if self._src.startswith("false", self._i):
-            self._i += 5
-            return _Tok(_TokType.BOOL, self._src[start : self._i], False)
+        for kw, val in (
+            ("true", True),
+            ("false", False),
+            ("null", None),
+            ("-inf", -math.inf),
+            ("inf", math.inf),
+            ("nan", math.nan),
+        ):
+            if self._src.startswith(kw, self._i):
+                end = self._i + len(kw)
+                if (
+                    end == len(self._src)
+                    or self._src[end] in _SPECIAL
+                    or self._src[end].isspace()
+                ):
+                    self._i = end
+                    return _Tok(_TokType.BOOL, self._src[start:end], val)
         raise SelectorError(f"Invalid token at position {start}: '{self._src[start:]}'")
 
     def _read_string(self, quote: str = '"') -> _Tok:
@@ -302,12 +313,17 @@ class SelectorLexer:
 
     def _read_number(self) -> _Tok:
         start = self._i
+        if self._src[self._i] in "+-":
+            self._i += 1
         while self._i < len(self._src) and (
             self._src[self._i].isdigit() or self._src[self._i] == "."
         ):
             self._i += 1
         raw = self._src[start : self._i]
-        val: int | float = float(raw) if "." in raw else int(raw)
+        try:
+            val: int | float = float(raw) if "." in raw else int(raw)
+        except ValueError as exc:
+            raise SelectorError(f"Invalid number at position {start}: '{raw}'") from exc
         return _Tok(_TokType.NUMBER, raw, val)
 
     def _read_ident(self) -> _Tok:
@@ -440,7 +456,9 @@ class SelectorParser:
                 f"Expected type annotation identifier or string, got '{tok.raw}'"
             )
         self._expect(_TokType.RPAREN)
-        return f"({tok.value})"
+        norm = _normalize_type_annotation(f"({tok.value})")
+        assert norm is not None
+        return norm
 
     def _filter(self) -> AttributeFilter:
         self._expect(_TokType.LBRACKET)
@@ -506,6 +524,13 @@ class SelectorParser:
 
     def _parse_value(self) -> Any:
         tok = self._cur()
+        if tok.typ == _TokType.PLUS:
+            self._advance()
+            num_tok = self._cur()
+            if num_tok.typ != _TokType.NUMBER or num_tok.raw.startswith("-"):
+                raise SelectorError(f"Expected number after '+', got '{num_tok.raw}'")
+            self._advance()
+            return num_tok.value
         if tok.typ in (_TokType.STRING, _TokType.NUMBER, _TokType.BOOL):
             self._advance()
             return tok.value
@@ -566,29 +591,77 @@ class SelectorParser:
         return None
 
     def _nth_expr(self) -> NthExpr:
-        if self._cur().typ == _TokType.NUMBER:
-            num = self._advance().value
-            if self._cur().typ == _TokType.IDENT and self._cur().raw == "n":
+        tok = self._cur()
+        if tok.typ == _TokType.IDENT:
+            if tok.raw == "odd":
                 self._advance()
-                a = int(num)
-                b = self._nth_offset()
-                return NthExpr(a=a, b=b)
-            return NthExpr(a=0, b=int(num))
-        if self._cur().typ == _TokType.IDENT and self._cur().raw == "n":
+                return NthExpr(a=2, b=1)
+            if tok.raw == "even":
+                self._advance()
+                return NthExpr(a=2, b=0)
+
+        has_plus = False
+        if self._cur().typ == _TokType.PLUS:
+            has_plus = True
             self._advance()
-            b = self._nth_offset()
-            return NthExpr(a=1, b=b)
-        raise SelectorError(f"Invalid nth expression, got '{self._cur().raw}'")
+
+        cur = self._cur()
+        if cur.typ == _TokType.NUMBER:
+            if has_plus and cur.raw.startswith("-"):
+                raise SelectorError(f"Invalid nth expression, got '{cur.raw}'")
+            num = self._advance().value
+            if not isinstance(num, int):
+                raise SelectorError(f"Invalid nth expression, got '{cur.raw}'")
+            if self._cur().typ == _TokType.IDENT:
+                ident_raw = self._cur().raw
+                if ident_raw == "n":
+                    self._advance()
+                    b = self._nth_offset()
+                    return NthExpr(a=num, b=b)
+                if ident_raw.startswith("n-") and ident_raw[2:].isdigit():
+                    self._advance()
+                    return NthExpr(a=num, b=int(ident_raw[1:]))
+            return NthExpr(a=0, b=num)
+
+        if cur.typ == _TokType.IDENT:
+            ident_raw = cur.raw
+            if has_plus and ident_raw.startswith("-"):
+                raise SelectorError(f"Invalid nth expression, got '{ident_raw}'")
+            if ident_raw == "n":
+                self._advance()
+                b = self._nth_offset()
+                return NthExpr(a=1, b=b)
+            if ident_raw == "-n":
+                self._advance()
+                b = self._nth_offset()
+                return NthExpr(a=-1, b=b)
+            if ident_raw.startswith("n-") and ident_raw[2:].isdigit():
+                self._advance()
+                return NthExpr(a=1, b=int(ident_raw[1:]))
+            if ident_raw.startswith("-n-") and ident_raw[3:].isdigit():
+                self._advance()
+                return NthExpr(a=-1, b=int(ident_raw[2:]))
+
+        raise SelectorError(f"Invalid nth expression, got '{cur.raw}'")
 
     def _nth_offset(self) -> int:
         if self._cur().typ == _TokType.PLUS:
             self._advance()
-            return int(self._expect(_TokType.NUMBER).value)
-        if self._cur().typ == _TokType.IDENT and self._cur().raw.startswith("-"):
-            raw = self._advance().raw
-            return int(raw)
-        if self._cur().typ == _TokType.NUMBER:
-            return int(self._advance().value)
+            tok = self._expect(_TokType.NUMBER)
+            if not isinstance(tok.value, int) or tok.raw.startswith("-"):
+                raise SelectorError(f"Invalid nth offset, got '{tok.raw}'")
+            return tok.value
+        if self._cur().typ == _TokType.IDENT and self._cur().raw == "-":
+            self._advance()
+            tok = self._expect(_TokType.NUMBER)
+            if not isinstance(tok.value, int) or tok.raw.startswith("-"):
+                raise SelectorError(f"Invalid nth offset, got '{tok.raw}'")
+            return -tok.value
+        if self._cur().typ == _TokType.NUMBER and self._cur().raw.startswith("-"):
+            tok = self._advance()
+            if not isinstance(tok.value, int):
+                raise SelectorError(f"Invalid nth offset, got '{tok.raw}'")
+            return tok.value
         return 0
 
 
@@ -597,6 +670,7 @@ class SelectorParser:
 # ---------------------------------------------------------------------------
 
 
+@functools.lru_cache(maxsize=512)
 def _normalize_type_annotation(ann: str | None) -> str | None:
     if ann is None:
         return None
@@ -652,15 +726,80 @@ class SelectorMatcher:
     def _matches_complex(self, node: KdlNode, sel: ComplexSelector) -> bool:
         if not self._matches_compound(node, sel.compounds[-1]):
             return False
-        current = node
-        for i in range(len(sel.combinators) - 1, -1, -1):
-            compound = sel.compounds[i]
-            comb = sel.combinators[i]
-            candidate = self._resolve_combinator(current, comb, compound)
-            if candidate is None:
+        if not sel.combinators:
+            return True
+        return self._matches_chain_from_right(
+            node, sel, len(sel.combinators) - 1, boundary=None, allowed_first=None
+        )
+
+    def _matches_chain_from_right(
+        self,
+        current: KdlNode,
+        sel: ComplexSelector,
+        comb_idx: int,
+        boundary: KdlNode | None,
+        allowed_first: set[int] | None,
+    ) -> bool:
+        if comb_idx < 0:
+            if allowed_first is not None:
+                return id(current) in allowed_first
+            return True
+
+        comb = sel.combinators[comb_idx]
+        target = sel.compounds[comb_idx]
+
+        if comb == Combinator.CHILD:
+            parent = None if current is boundary else self._ctx.parent_of(current)
+            if (
+                parent is not None
+                and parent is not boundary
+                and self._matches_compound(parent, target)
+            ):
+                return self._matches_chain_from_right(
+                    parent, sel, comb_idx - 1, boundary, allowed_first
+                )
+            return False
+
+        if comb == Combinator.DESCENDANT:
+            cur = None if current is boundary else self._ctx.parent_of(current)
+            while cur is not None and cur is not boundary:
+                if self._matches_compound(cur, target) and self._matches_chain_from_right(
+                    cur, sel, comb_idx - 1, boundary, allowed_first
+                ):
+                    return True
+                cur = self._ctx.parent_of(cur)
+            return False
+
+        if comb == Combinator.ADJACENT:
+            if current is boundary:
                 return False
-            current = candidate
-        return True
+            idx = self._ctx.index_of(current)
+            if idx <= 0:
+                return False
+            siblings = self._ctx.siblings_of(current)
+            prev = siblings[idx - 1]
+            if self._matches_compound(prev, target):
+                return self._matches_chain_from_right(
+                    prev, sel, comb_idx - 1, boundary, allowed_first
+                )
+            return False
+
+        if comb == Combinator.GENERAL_SIBLING:
+            if current is boundary:
+                return False
+            idx = self._ctx.index_of(current)
+            if idx <= 0:
+                return False
+            siblings = self._ctx.siblings_of(current)
+            for j in range(idx - 1, -1, -1):
+                prev = siblings[j]
+                if self._matches_compound(prev, target) and self._matches_chain_from_right(
+                    prev, sel, comb_idx - 1, boundary, allowed_first
+                ):
+                    return True
+            return False
+
+        return False
 
     def _resolve_combinator(
         self,
@@ -765,6 +904,8 @@ class SelectorMatcher:
     @staticmethod
     def _compare(actual: Any, op: str, expected: Any) -> bool:
         if op == "=":
+            if isinstance(expected, float) and math.isnan(expected):
+                return isinstance(actual, float) and math.isnan(actual)
             return bool(actual == expected)
         if op == "^=":
             return str(actual).startswith(str(expected))
@@ -790,23 +931,33 @@ class SelectorMatcher:
             return self._ctx.parent_of(node) is None
         if pseudo.name == "empty":
             return len(node.children) == 0
-        siblings = self._ctx.siblings_of(node)
-        same_type = [s for s in siblings if self._matches_node(s, node_sel)]
-        if pseudo.name == "only-child":
-            return len(same_type) == 1
-        pos = 0
-        for i, s in enumerate(same_type):
-            if s is node:
-                pos = i + 1
-                break
-        if pos == 0:
-            return False
         if pseudo.name == "first-child":
-            return pos == 1
+            for s in self._ctx.siblings_of(node):
+                if self._matches_node(s, node_sel):
+                    return s is node
+            return False
         if pseudo.name == "last-child":
-            return pos == len(same_type)
+            for s in reversed(self._ctx.siblings_of(node)):
+                if self._matches_node(s, node_sel):
+                    return s is node
+            return False
+        if pseudo.name == "only-child":
+            found_node = False
+            for s in self._ctx.siblings_of(node):
+                if self._matches_node(s, node_sel):
+                    if s is node:
+                        found_node = True
+                    else:
+                        return False
+            return found_node
         if pseudo.name == "nth-child" and pseudo.nth is not None:
-            return self._matches_nth_1based(pos, pseudo.nth)
+            pos = 0
+            for s in self._ctx.siblings_of(node):
+                if self._matches_node(s, node_sel):
+                    pos += 1
+                    if s is node:
+                        return self._matches_nth_1based(pos, pseudo.nth)
+            return False
         return False
 
     def _matches_has(
@@ -815,27 +966,85 @@ class SelectorMatcher:
         initial: Combinator | None,
         sel: ComplexSelector,
     ) -> bool:
+        if initial is None:
+            if not sel.combinators:
+                return any(
+                    self._matches_compound(c, sel.compounds[0])
+                    for c in node.iter_descendants()
+                )
+            last = sel.compounds[-1]
+            last_comb_idx = len(sel.combinators) - 1
+            for target_node in node.iter_descendants():
+                if self._matches_compound(
+                    target_node, last
+                ) and self._matches_chain_from_right(
+                    target_node, sel, last_comb_idx, boundary=node, allowed_first=None
+                ):
+                    return True
+            return False
+
         if initial == Combinator.CHILD:
-            candidates: Iterator[KdlNode] = iter(node.children)
-        else:
-            candidates = node.iter_descendants()
-
-        if not sel.combinators:
-            return any(self._matches_compound(c, sel.compounds[0]) for c in candidates)
-
-        for candidate in candidates:
-            if not self._matches_compound(candidate, sel.compounds[0]):
-                continue
-            current = candidate
-            matched = True
-            for j, comb in enumerate(sel.combinators):
-                nxt = self._resolve_combinator(current, comb, sel.compounds[j + 1])
-                if nxt is None:
-                    matched = False
-                    break
-                current = nxt
-            if matched:
+            matched_children = [
+                c for c in node.children if self._matches_compound(c, sel.compounds[0])
+            ]
+            if not matched_children:
+                return False
+            if not sel.combinators:
                 return True
+            allowed_first = {id(c) for c in matched_children}
+            last = sel.compounds[-1]
+            last_comb_idx = len(sel.combinators) - 1
+            for target_node in node.iter_descendants():
+                if self._matches_compound(
+                    target_node, last
+                ) and self._matches_chain_from_right(
+                    target_node,
+                    sel,
+                    last_comb_idx,
+                    boundary=node,
+                    allowed_first=allowed_first,
+                ):
+                    return True
+            return False
+
+        if initial in (Combinator.ADJACENT, Combinator.GENERAL_SIBLING):
+            siblings = self._ctx.siblings_of(node)
+            idx = self._ctx.index_of(node)
+            if idx < 0 or idx + 1 >= len(siblings):
+                return False
+            if initial == Combinator.ADJACENT:
+                foll_siblings = [siblings[idx + 1]]
+            else:
+                foll_siblings = siblings[idx + 1 :]
+            matched_sibs = [
+                s for s in foll_siblings if self._matches_compound(s, sel.compounds[0])
+            ]
+            if not matched_sibs:
+                return False
+            if not sel.combinators:
+                return True
+            allowed_first = {id(s) for s in matched_sibs}
+            boundary = self._ctx.parent_of(node)
+            last = sel.compounds[-1]
+            last_comb_idx = len(sel.combinators) - 1
+            for s in siblings[idx + 1 :]:
+                if self._matches_compound(s, last) and self._matches_chain_from_right(
+                    s, sel, last_comb_idx, boundary=boundary, allowed_first=allowed_first
+                ):
+                    return True
+                for desc in s.iter_descendants():
+                    if self._matches_compound(
+                        desc, last
+                    ) and self._matches_chain_from_right(
+                        desc,
+                        sel,
+                        last_comb_idx,
+                        boundary=boundary,
+                        allowed_first=allowed_first,
+                    ):
+                        return True
+            return False
+
         return False
 
     @staticmethod
@@ -843,6 +1052,8 @@ class SelectorMatcher:
         if nth.a == 0:
             return pos == nth.b
         diff = pos - nth.b
+        if nth.a < 0:
+            return diff <= 0 and diff % nth.a == 0
         return diff >= 0 and diff % nth.a == 0
 
 
