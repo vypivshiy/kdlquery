@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol, TypeVar, runtime_checkable
 
 from .document import KdlDocument
-from .reader import KdlNode, KdlValue
+from .reader import KdlNode, KdlValue, _EMPTY_SPAN
 from .types import (
     CSTArgEntry,
     CSTDocument,
@@ -463,4 +463,5 @@ __all__ = [
     "CstBuilder",
     "_NullBuilder",
     "_NULL_BUILDER",
+    "_EMPTY_SPAN",
 ]

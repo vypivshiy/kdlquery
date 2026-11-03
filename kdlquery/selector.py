@@ -263,7 +263,7 @@ class SelectorLexer:
                 return _Tok(_TokType.TILDE_EQ, "~=", None)
             return _Tok(_TokType.TILDE, "~", None)
         if ch == "#":
-            return self._read_bool()
+            return self._read_hash_literal()
         if ch in ('"', "'"):
             return self._read_string(ch)
         if ch.isdigit() or (
@@ -274,7 +274,7 @@ class SelectorLexer:
             return self._read_ident()
         raise SelectorError(f"Unexpected character '{ch}' at position {self._i}")
 
-    def _read_bool(self) -> _Tok:
+    def _read_hash_literal(self) -> _Tok:
         start = self._i
         self._i += 1
         for kw, val in (
@@ -801,48 +801,6 @@ class SelectorMatcher:
 
         return False
 
-    def _resolve_combinator(
-        self,
-        node: KdlNode,
-        comb: Combinator,
-        target: CompoundSelector,
-    ) -> KdlNode | None:
-        if comb == Combinator.CHILD:
-            parent = self._ctx.parent_of(node)
-            if parent is not None and self._matches_compound(parent, target):
-                return parent
-            return None
-
-        if comb == Combinator.DESCENDANT:
-            cur = self._ctx.parent_of(node)
-            while cur is not None:
-                if self._matches_compound(cur, target):
-                    return cur
-                cur = self._ctx.parent_of(cur)
-            return None
-
-        if comb == Combinator.ADJACENT:
-            idx = self._ctx.index_of(node)
-            if idx <= 0:
-                return None
-            siblings = self._ctx.siblings_of(node)
-            prev = siblings[idx - 1]
-            if self._matches_compound(prev, target):
-                return prev
-            return None
-
-        if comb == Combinator.GENERAL_SIBLING:
-            idx = self._ctx.index_of(node)
-            if idx <= 0:
-                return None
-            siblings = self._ctx.siblings_of(node)
-            for j in range(idx - 1, -1, -1):
-                if self._matches_compound(siblings[j], target):
-                    return siblings[j]
-            return None
-
-        return None
-
     def _matches_compound(self, node: KdlNode, compound: CompoundSelector) -> bool:
         if not self._matches_node(node, compound.node):
             return False
@@ -966,32 +924,24 @@ class SelectorMatcher:
         initial: Combinator | None,
         sel: ComplexSelector,
     ) -> bool:
-        if initial is None:
-            if not sel.combinators:
-                return any(
-                    self._matches_compound(c, sel.compounds[0])
-                    for c in node.iter_descendants()
-                )
-            last = sel.compounds[-1]
-            last_comb_idx = len(sel.combinators) - 1
-            for target_node in node.iter_descendants():
-                if self._matches_compound(
-                    target_node, last
-                ) and self._matches_chain_from_right(
-                    target_node, sel, last_comb_idx, boundary=node, allowed_first=None
-                ):
+        if initial is None or initial == Combinator.CHILD:
+            if initial is None:
+                if not sel.combinators:
+                    return any(
+                        self._matches_compound(c, sel.compounds[0])
+                        for c in node.iter_descendants()
+                    )
+                allowed_first: set[int] | None = None
+            else:
+                matched_children = [
+                    c for c in node.children if self._matches_compound(c, sel.compounds[0])
+                ]
+                if not matched_children:
+                    return False
+                if not sel.combinators:
                     return True
-            return False
+                allowed_first = {id(c) for c in matched_children}
 
-        if initial == Combinator.CHILD:
-            matched_children = [
-                c for c in node.children if self._matches_compound(c, sel.compounds[0])
-            ]
-            if not matched_children:
-                return False
-            if not sel.combinators:
-                return True
-            allowed_first = {id(c) for c in matched_children}
             last = sel.compounds[-1]
             last_comb_idx = len(sel.combinators) - 1
             for target_node in node.iter_descendants():

@@ -5,7 +5,14 @@ import math
 import re
 from typing import Any, Generic, NamedTuple, TypeVar, overload
 
-from .builder import AstBuilder, CstBuilder, TreeBuilder, _NULL_BUILDER, _NullBuilder
+from .builder import (
+    AstBuilder,
+    CstBuilder,
+    TreeBuilder,
+    _EMPTY_SPAN,
+    _NULL_BUILDER,
+    _NullBuilder,
+)
 
 from .types import (
     CSTArgEntry,
@@ -907,28 +914,6 @@ class KDL2CSTParser:
 
 T = TypeVar("T")
 
-
-class ParsedIdentifier(NamedTuple):
-    value: str
-    raw: str
-    span: Span
-
-
-class ParsedType(NamedTuple):
-    raw: str
-    span: Span
-
-
-class ParsedValue(NamedTuple):
-    value: Any
-    raw: str
-    span: Span
-    type_annotation: ParsedType | None
-    is_bare_ident: bool
-
-
-_EMPTY_SPAN: Span = Span(Position(0, 0, 0), Position(0, 0, 0))
-
 _VALUE_TOKEN_TYPES: frozenset[TokenType] = frozenset(
     {
         TokenType.STRING,
@@ -1088,63 +1073,39 @@ class _Parser(Generic[T]):
         is_null = builder is _NULL_BUILDER or type(builder) is _NullBuilder
         is_ast = type(builder) is AstBuilder
 
-        node_type: ParsedType | None = None
-        name: ParsedIdentifier | None = None
-        node_start_offset = 0
+        node_type_raw, type_start_offset, type_end_offset = (
+            self._try_consume_type_annotation(is_null=is_null)
+        )
+        name_tok = self._consume_identifier_token()
+        node_start_offset = (
+            type_start_offset if type_start_offset >= 0 else name_tok.start_offset
+        )
+        prev_end = name_tok.end_offset
 
-        if is_null:
-            if self._match(TokenType.LPAREN):
-                self._consume_identifier_token()
-                self._expect(TokenType.RPAREN)
-            name_tok = self._consume_identifier_token()
-            builder.start_node(
-                str(name_tok.value),
-                None,
-                _EMPTY_SPAN,
-                name_raw=name_tok.raw,
-                name_span=_EMPTY_SPAN,
-                type_span=None,
-            )
-            prev_end = name_tok.end_offset
-        elif is_ast:
-            if self._match(TokenType.LPAREN):
-                lparen = self._prev()
-                self._consume_identifier_token()
-                rparen = self._expect(TokenType.RPAREN)
-                node_type_raw: str | None = self._slice(
-                    lparen.start_offset, rparen.end_offset
-                )
-                node_start_offset = lparen.start_offset
-            else:
-                node_type_raw = None
-            name_tok = self._consume_identifier_token()
-            if node_type_raw is None:
-                node_start_offset = name_tok.start_offset
-            builder.start_node(
-                str(name_tok.value),
-                node_type_raw,
-                _EMPTY_SPAN,
-                name_raw=name_tok.raw,
-                name_span=_EMPTY_SPAN,
-                type_span=None,
-            )
-            prev_end = name_tok.end_offset
+        if is_null or is_ast:
+            type_span: Span | None = None
+            name_span = _EMPTY_SPAN
+            start_span = _EMPTY_SPAN
         else:
-            node_type = self._try_parse_type_annotation()
-            name = self._parse_identifier_like()
+            type_span = (
+                self._span(type_start_offset, type_end_offset)
+                if type_start_offset >= 0
+                else None
+            )
+            name_span = self._span(name_tok.start_offset, name_tok.end_offset)
             start_span = Span(
-                node_type.span.start if node_type else name.span.start,
-                name.span.end,
+                type_span.start if type_span is not None else name_span.start,
+                name_span.end,
             )
-            builder.start_node(
-                name.value,
-                node_type.raw if node_type else None,
-                start_span,
-                name_raw=name.raw,
-                name_span=name.span,
-                type_span=node_type.span if node_type else None,
-            )
-            prev_end = name.span.end.offset
+
+        builder.start_node(
+            str(name_tok.value),
+            node_type_raw,
+            start_span,
+            name_raw=name_tok.raw,
+            name_span=name_span,
+            type_span=type_span,
+        )
 
         has_children_block = False
 
@@ -1223,160 +1184,113 @@ class _Parser(Generic[T]):
             builder.end_children(children_block_span)
 
         if is_null:
-            builder.end_node(_EMPTY_SPAN)
+            node_span = _EMPTY_SPAN
         elif is_ast:
             end_offset = (
                 self._prev().end_offset if self.i > 0 else name_tok.end_offset
             )
-            builder.end_node(self._span(node_start_offset, end_offset))
+            node_span = self._span(node_start_offset, end_offset)
         else:
-            assert name is not None
             end_pos = (
-                self._pos(self._prev().end_offset) if self.i > 0 else name.span.end
+                self._pos(self._prev().end_offset) if self.i > 0 else name_span.end
             )
-            node_span = Span(
-                (node_type.span.start if node_type else name.span.start), end_pos
-            )
-            builder.end_node(node_span)
+            node_span = Span(start_span.start, end_pos)
+        builder.end_node(node_span)
 
     def _parse_entry(self) -> int:
         builder = self.builder
-        if builder is _NULL_BUILDER or type(builder) is _NullBuilder:
-            if (
-                self._is_identifier_token(self._peek())
-                and self._peek(1).typ == TokenType.EQUAL
-            ):
-                key_tok = self._consume_identifier_token()
-                self._expect(TokenType.EQUAL)
-                if self._match(TokenType.LPAREN):
-                    self._consume_identifier_token()
-                    self._expect(TokenType.RPAREN)
-                val_tok = self._consume_value_token()
-                builder.add_prop(
-                    str(key_tok.value),
-                    val_tok.value,
-                    None,
-                    _EMPTY_SPAN,
-                    key_raw=key_tok.raw,
-                    key_span=_EMPTY_SPAN,
-                    value_raw=val_tok.raw,
-                    value_span=_EMPTY_SPAN,
-                    type_span=None,
-                )
-                return val_tok.end_offset
+        is_null = builder is _NULL_BUILDER or type(builder) is _NullBuilder
+        is_ast = type(builder) is AstBuilder
 
-            if self._match(TokenType.LPAREN):
-                self._consume_identifier_token()
-                self._expect(TokenType.RPAREN)
-            val_tok = self._consume_value_token()
-            builder.add_arg(
-                val_tok.value,
-                None,
-                _EMPTY_SPAN,
-                raw=val_tok.raw,
-                value_span=_EMPTY_SPAN,
-                type_span=None,
+        is_prop = (
+            self._is_identifier_token(self._peek())
+            and self._peek(1).typ == TokenType.EQUAL
+        )
+        key_tok: RawToken | None = None
+        if is_prop:
+            key_tok = self._consume_identifier_token()
+            self._expect(TokenType.EQUAL)
+
+        val_type_raw, type_start_offset, type_end_offset = (
+            self._try_consume_type_annotation(is_null=is_null)
+        )
+        val_tok = self._consume_value_token()
+        val_start_offset = (
+            type_start_offset if type_start_offset >= 0 else val_tok.start_offset
+        )
+        is_bare_ident = val_tok.typ == TokenType.IDENT and type_start_offset < 0
+        val = str(val_tok.value) if val_tok.typ == TokenType.IDENT else val_tok.value
+
+        if is_null:
+            type_span: Span | None = None
+            val_span = _EMPTY_SPAN
+            val_raw = val_tok.raw
+        elif is_ast:
+            type_span = None
+            val_span = (
+                _EMPTY_SPAN
+                if key_tok is not None
+                else self._span(val_start_offset, val_tok.end_offset)
             )
-            return val_tok.end_offset
+            val_raw = val_tok.raw
+        elif type_start_offset >= 0:
+            type_span = self._span(type_start_offset, type_end_offset)
+            val_span = Span(type_span.start, self._pos(val_tok.end_offset))
+            val_raw = self._slice(type_start_offset, val_tok.end_offset)
+        else:
+            type_span = None
+            val_span = self._span(val_tok.start_offset, val_tok.end_offset)
+            val_raw = val_tok.raw
 
-        if type(builder) is AstBuilder:
-            if (
-                self._is_identifier_token(self._peek())
-                and self._peek(1).typ == TokenType.EQUAL
-            ):
-                key_tok = self._consume_identifier_token()
-                self._expect(TokenType.EQUAL)
-                if self._match(TokenType.LPAREN):
-                    lparen = self._prev()
-                    self._consume_identifier_token()
-                    rparen = self._expect(TokenType.RPAREN)
-                    val_type_raw: str | None = self._slice(
-                        lparen.start_offset, rparen.end_offset
-                    )
-                else:
-                    val_type_raw = None
-                val_tok = self._consume_value_token()
-                val = (
-                    str(val_tok.value)
-                    if val_tok.typ == TokenType.IDENT
-                    else val_tok.value
-                )
+        if key_tok is not None:
+            if is_null:
+                key_span = _EMPTY_SPAN
+                entry_span = _EMPTY_SPAN
+            elif is_ast:
+                key_span = _EMPTY_SPAN
                 entry_span = self._span(key_tok.start_offset, val_tok.end_offset)
-                builder.add_prop(
-                    str(key_tok.value),
-                    val,
-                    val_type_raw,
-                    entry_span,
-                    key_raw=key_tok.raw,
-                    key_span=_EMPTY_SPAN,
-                    value_raw=val_tok.raw,
-                    value_span=entry_span,
-                    type_span=None,
-                )
-                return val_tok.end_offset
-
-            if self._match(TokenType.LPAREN):
-                lparen = self._prev()
-                self._consume_identifier_token()
-                rparen = self._expect(TokenType.RPAREN)
-                val_type_raw = self._slice(lparen.start_offset, rparen.end_offset)
-                arg_start_offset = lparen.start_offset
+                val_span = entry_span
             else:
-                val_type_raw = None
-                arg_start_offset = -1
-            val_tok = self._consume_value_token()
-            if val_type_raw is None:
-                arg_start_offset = val_tok.start_offset
-            val = (
-                str(val_tok.value)
-                if val_tok.typ == TokenType.IDENT
-                else val_tok.value
+                key_span = self._span(key_tok.start_offset, key_tok.end_offset)
+                entry_span = Span(key_span.start, val_span.end)
+
+            builder.add_prop(
+                str(key_tok.value),
+                val,
+                val_type_raw,
+                entry_span,
+                key_raw=key_tok.raw,
+                key_span=key_span,
+                value_raw=val_raw,
+                value_span=val_span,
+                type_span=type_span,
+                is_bare_ident=is_bare_ident,
             )
-            arg_span = self._span(arg_start_offset, val_tok.end_offset)
+        else:
             builder.add_arg(
                 val,
                 val_type_raw,
-                arg_span,
-                raw=val_tok.raw,
-                value_span=arg_span,
-                type_span=None,
+                val_span,
+                raw=val_raw,
+                value_span=val_span,
+                type_span=type_span,
+                is_bare_ident=is_bare_ident,
             )
-            return val_tok.end_offset
 
-        # property: key = value, where key is an identifier string
-        if (
-            self._is_identifier_token(self._peek())
-            and self._peek(1).typ == TokenType.EQUAL
-        ):
-            key = self._parse_identifier_like()
-            self._expect(TokenType.EQUAL)
-            parsed_val = self._parse_value_like_info()
-            entry_span = Span(key.span.start, parsed_val.span.end)
-            builder.add_prop(
-                key.value,
-                parsed_val.value,
-                parsed_val.type_annotation.raw if parsed_val.type_annotation else None,
-                entry_span,
-                key_raw=key.raw,
-                key_span=key.span,
-                value_raw=parsed_val.raw,
-                value_span=parsed_val.span,
-                type_span=parsed_val.type_annotation.span if parsed_val.type_annotation else None,
-                is_bare_ident=parsed_val.is_bare_ident,
-            )
-            return parsed_val.span.end.offset
+        return val_tok.end_offset
 
-        parsed_val = self._parse_value_like_info()
-        builder.add_arg(
-            parsed_val.value,
-            parsed_val.type_annotation.raw if parsed_val.type_annotation else None,
-            parsed_val.span,
-            raw=parsed_val.raw,
-            value_span=parsed_val.span,
-            type_span=parsed_val.type_annotation.span if parsed_val.type_annotation else None,
-            is_bare_ident=parsed_val.is_bare_ident,
-        )
-        return parsed_val.span.end.offset
+    def _try_consume_type_annotation(
+        self, *, is_null: bool
+    ) -> tuple[str | None, int, int]:
+        if not self._match(TokenType.LPAREN):
+            return None, -1, -1
+        lparen = self._prev()
+        self._consume_identifier_token()
+        rparen = self._expect(TokenType.RPAREN)
+        start_offset = lparen.start_offset
+        end_offset = rparen.end_offset
+        raw = None if is_null else self._slice(start_offset, end_offset)
+        return raw, start_offset, end_offset
 
     def _consume_identifier_token(self) -> RawToken:
         tok = self._peek()
@@ -1393,80 +1307,6 @@ class _Parser(Generic[T]):
                 tok, f"Expected value, got {tok.typ}", code="expected-value"
             )
         return self._advance()
-
-    def _try_parse_type_annotation(self) -> ParsedType | None:
-        if not self._match(TokenType.LPAREN):
-            return None
-
-        lparen = self._prev()
-        self._consume_identifier_token()
-        rparen = self._expect(TokenType.RPAREN)
-
-        raw = self._slice(lparen.start_offset, rparen.end_offset)
-        return ParsedType(
-            raw=raw,
-            span=self._span(lparen.start_offset, rparen.end_offset),
-        )
-
-    def _parse_identifier_like(self) -> ParsedIdentifier:
-        tok = self._consume_identifier_token()
-        return ParsedIdentifier(
-            value=str(tok.value),
-            raw=tok.raw,
-            span=self._span(tok.start_offset, tok.end_offset),
-        )
-
-    def _parse_value_like_info(self) -> ParsedValue:
-        ty = self._try_parse_type_annotation()
-        tok = self._peek()
-
-        if tok.typ in (
-            TokenType.STRING,
-            TokenType.NUMBER,
-            TokenType.BOOL,
-            TokenType.NULL,
-            TokenType.KEYWORD_NUMBER,
-        ):
-            self._advance()
-            if ty:
-                raw = self._slice(ty.span.start.offset, tok.end_offset)
-                start_pos = ty.span.start
-            else:
-                raw = tok.raw
-                start_pos = self._pos(tok.start_offset)
-            val_span = Span(start_pos, self._pos(tok.end_offset))
-            return ParsedValue(
-                value=tok.value,
-                raw=raw,
-                span=val_span,
-                type_annotation=ty,
-                is_bare_ident=False,
-            )
-
-        if tok.typ == TokenType.IDENT:
-            self._advance()
-            if ty:
-                raw = self._slice(ty.span.start.offset, tok.end_offset)
-                val_span = Span(ty.span.start, self._pos(tok.end_offset))
-                return ParsedValue(
-                    value=str(tok.value),
-                    raw=raw,
-                    span=val_span,
-                    type_annotation=ty,
-                    is_bare_ident=False,
-                )
-            tok_span = self._span(tok.start_offset, tok.end_offset)
-            return ParsedValue(
-                value=str(tok.value),
-                raw=tok.raw,
-                span=tok_span,
-                type_annotation=None,
-                is_bare_ident=True,
-            )
-
-        raise self._error_tok(
-            tok, f"Expected value, got {tok.typ}", code="expected-value"
-        )
 
     def _is_node_terminator(self) -> bool:
         return (
