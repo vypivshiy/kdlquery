@@ -5,10 +5,10 @@ Enable `slots=True` on `_CstNodeFrame`. Optimize the parser so that when discard
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] `_CstNodeFrame` uses `slots=True`.
-- [ ] Discarded slashdash (`/-`) subtrees and entries under `_NullBuilder` do not trigger `bisect_right` position lookups.
-- [ ] `AstBuilder` parsing avoids computing unused intermediate spans while preserving exact `node.span`, `arg.span`, `prop.span`, and `doc.span` coordinates.
-- [ ] `_escape_quoted`, `_serialize_multiline`, and `_is_bare_ident` use compiled regex fast-paths and pass all serialization and round-trip tests.
-- [ ] All 403 official KDL 2.0 compliance tests, CST/AST equivalence tests, and performance benchmarks pass.
+- [x] `_CstNodeFrame` uses `slots=True`.
+- [x] Discarded slashdash (`/-`) subtrees and entries under `_NullBuilder` do not trigger `bisect_right` position lookups.
+- [x] `AstBuilder` parsing avoids computing unused intermediate spans while preserving exact `node.span`, `arg.span`, `prop.span`, and `doc.span` coordinates.
+- [x] `_escape_quoted`, `_serialize_multiline`, and `_is_bare_ident` use compiled regex fast-paths and pass all serialization and round-trip tests.
+- [x] All 403 official KDL 2.0 compliance tests, CST/AST equivalence tests, and performance benchmarks pass.

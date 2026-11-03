@@ -5,11 +5,11 @@ Repair and extend the CSS3 Node Selector engine so that `:has()` accurately eval
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] `node:has(> a > b)` and `node:has(a > b)` evaluate complex selectors accurately within `node`'s descendant subtree without matching `node` itself or its ancestors as `a`.
-- [ ] `node:has(+ sibling)` and `node:has(~ sibling)` evaluate against the immediately following sibling or all following siblings of `node` (including complex sub-selectors).
-- [ ] Negative integers and floats (`[offset=-5]`, `[0=-0.5]`) and KDL 2.0 keyword literals (`#null`, `#inf`, `#-inf`, `#nan`) are tokenized and matched in property and argument filters.
-- [ ] `:nth-child(odd)`, `:nth-child(even)`, and negative-step `:nth-child(-n+B)` expressions match the expected 1-based positions.
-- [ ] All selector AST dataclasses use `slots=True`, type annotations are pre-normalized/cached, and positional pseudo-classes avoid full sibling list allocations where possible.
-- [ ] All existing and new selector tests pass cleanly.
+- [x] `node:has(> a > b)` and `node:has(a > b)` evaluate complex selectors accurately within `node`'s descendant subtree without matching `node` itself or its ancestors as `a`.
+- [x] `node:has(+ sibling)` and `node:has(~ sibling)` evaluate against the immediately following sibling or all following siblings of `node` (including complex sub-selectors).
+- [x] Negative integers and floats (`[offset=-5]`, `[0=-0.5]`) and KDL 2.0 keyword literals (`#null`, `#inf`, `#-inf`, `#nan`) are tokenized and matched in property and argument filters.
+- [x] `:nth-child(odd)`, `:nth-child(even)`, and negative-step `:nth-child(-n+B)` expressions match the expected 1-based positions.
+- [x] All selector AST dataclasses use `slots=True`, type annotations are pre-normalized/cached, and positional pseudo-classes avoid full sibling list allocations where possible.
+- [x] All existing and new selector tests pass cleanly.

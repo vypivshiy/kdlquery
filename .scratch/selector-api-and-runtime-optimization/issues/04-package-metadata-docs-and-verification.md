@@ -5,8 +5,8 @@ Enrich `pyproject.toml` with `license = "MIT"`, `keywords`, and standard PyPI `c
 
 **Blocked by:** 01: CSS3 Node Selector `:has()`, KDL 2.0 Literals, `:nth-child()` & Matcher Optimizations, 02: Ergonomic Tree Mutation, Direct `parse_into` (`str | KdlDocument | CSTDocument`), and Slotted Data Model, 03: Parser Span Fast-Paths (`AstBuilder` / `_NullBuilder`) and Regex-Accelerated Serialization
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] `pyproject.toml` includes `license`, `keywords`, and `classifiers` while keeping `version = "1.6.0"` unchanged.
-- [ ] `README.md` and `llm.txt` accurately reflect the updated selector syntax, `KdlNode` mutation ergonomics, and `parse_into` capabilities.
-- [ ] `uv run pytest`, `uv run mypy kdlquery`, and `uv run ruff check .` pass with zero errors.
+- [x] `pyproject.toml` includes `license`, `keywords`, and `classifiers` while keeping `version = "1.6.0"` unchanged.
+- [x] `README.md` and `llm.txt` accurately reflect the updated selector syntax, `KdlNode` mutation ergonomics, and `parse_into` capabilities.
+- [x] `uv run pytest`, `uv run mypy kdlquery`, and `uv run ruff check .` pass with zero errors.

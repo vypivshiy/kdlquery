@@ -5,11 +5,11 @@ Enable `slots=True` across the tree and reader data model (`KdlDocument`, `KdlNo
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] `KdlDocument`, `KdlNode`, `KdlValue`, `_Keyword`, `ReadDiagnostic`, `DiagnosticCollector`, and `WalkContext` use `slots=True` (no `__dict__` on instances) while all tree mutations continue to work identically.
-- [ ] `KdlNode.remove_child(index)` clears `document` (`_document = None`) on both the removed child and all of its nested descendants.
-- [ ] `KdlNode.create()` accepts raw Python primitives or `KdlValue` in `args` and `properties`.
-- [ ] `KdlNode.add_arg(value, *, type_annotation=None)` and `KdlNode.set_prop(key, value, *, type_annotation=None)` accept raw Python primitives or `KdlValue`.
-- [ ] `parse_into()` and `Walker.walk_document()` accept `str`, `KdlDocument`, or `CSTDocument` and ensure `node.document` is wired during `Reader` traversal.
-- [ ] All existing and new reader, navigation, and mutation tests pass cleanly.
+- [x] `KdlDocument`, `KdlNode`, `KdlValue`, `_Keyword`, `ReadDiagnostic`, `DiagnosticCollector`, and `WalkContext` use `slots=True` (no `__dict__` on instances) while all tree mutations continue to work identically.
+- [x] `KdlNode.remove_child(index)` clears `document` (`_document = None`) on both the removed child and all of its nested descendants.
+- [x] `KdlNode.create()` accepts raw Python primitives or `KdlValue` in `args` and `properties`.
+- [x] `KdlNode.add_arg(value, *, type_annotation=None)` and `KdlNode.set_prop(key, value, *, type_annotation=None)` accept raw Python primitives or `KdlValue`.
+- [x] `parse_into()` and `Walker.walk_document()` accept `str`, `KdlDocument`, or `CSTDocument` and ensure `node.document` is wired during `Reader` traversal.
+- [x] All existing and new reader, navigation, and mutation tests pass cleanly.
