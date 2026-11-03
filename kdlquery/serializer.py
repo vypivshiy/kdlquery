@@ -22,14 +22,10 @@ classes.
 from __future__ import annotations
 
 import math
+import re
 from typing import TYPE_CHECKING
 
-from .parser import (
-    _DISALLOWED_IDENT_CHARS,
-    _NEWLINES,
-    _RESERVED_BARE_IDS,
-    _UNICODE_SPACES,
-)
+from .parser import _RESERVED_BARE_IDS
 from .reader import KdlValue, _Keyword
 
 if TYPE_CHECKING:
@@ -48,80 +44,32 @@ _SIMPLE_ESCAPES: dict[str, str] = {
     "\f": "\\f",
 }
 
+_NEEDS_ESCAPE_RE = re.compile(
+    r'[\x00-\x1f"\\\x7f\u200e\u200f\u202a-\u202e\u2066-\u2069\ufeff\ud800-\udfff]'
+)
 
-def _is_disallowed_literal(ch: str) -> bool:
-    """Return True if ``ch`` is a disallowed literal code point (KDL §3.19).
+_NON_BARE_IDENT_CHARS = (
+    r'\\/(){};\[\]"=\#'
+    r"\x00-\x20\x7f"
+    r"\u0085\u00a0\u1680\u2000-\u200a\u200e\u200f\u2028-\u202f\u205f\u2066-\u2069\u3000\ufeff"
+    r"\ud800-\udfff"
+)
 
-    Such code points cannot appear literally anywhere in a KDL document
-    and must be expressed via ``\\u{...}`` escapes inside strings.
-    Surrogates (U+D800-DFFF) are also rejected here because they are not
-    Unicode Scalar Values and cannot be represented at all.
-    """
-    cp = ord(ch)
-    # C0 control characters (other than tab U+0009) and DEL.
-    if (0x00 <= cp <= 0x1F and cp != 0x09) or cp == 0x7F:
-        return True
-    # UTF-16 surrogates — not Unicode Scalar Values.
-    if 0xD800 <= cp <= 0xDFFF:
-        return True
-    # Bi-directional control characters.
-    if cp in (0x200E, 0x200F) or 0x202A <= cp <= 0x202E or 0x2066 <= cp <= 0x2069:
-        return True
-    # ZWNBSP / BOM (allowed only as first code point of a document).
-    if cp == 0xFEFF:
-        return True
-    return False
+_BARE_IDENT_RE = re.compile(
+    rf"(?:[^0-9+\-.{_NON_BARE_IDENT_CHARS}]|\.(?![0-9])|[+-](?![0-9]|\.[0-9]))[^{_NON_BARE_IDENT_CHARS}]*\Z"
+)
 
 
 def _is_bare_ident(s: str) -> bool:
-    """Return ``True`` if ``s`` can be emitted as a KDL identifier string.
-
-    Implements the rules from KDL 2.0 §3.10:
-    - non-empty
-    - not a reserved keyword (``true``, ``false``, ``null``, ``inf``, ...)
-    - first character is not a digit or a non-identifier character
-    - ``+``/``-`` first: second char must not be a digit; if second is ``.``,
-      third must not be a digit
-    - ``.`` first: second char must not be a digit
-    - no character is a non-identifier character, whitespace, newline,
-      or disallowed literal code point
-    """
-    if not s or s in _RESERVED_BARE_IDS:
+    """Return ``True`` if ``s`` can be emitted as a KDL identifier string."""
+    if s in _RESERVED_BARE_IDS:
         return False
-    first = s[0]
-    if (
-        first.isdigit()
-        or first in _DISALLOWED_IDENT_CHARS
-        or first in _UNICODE_SPACES
-        or first in _NEWLINES
-        or _is_disallowed_literal(first)
-    ):
-        return False
-    if first in "+-" and len(s) > 1:
-        if s[1].isdigit():
-            return False
-        if s[1] == "." and len(s) > 2 and s[2].isdigit():
-            return False
-    if first == "." and len(s) > 1 and s[1].isdigit():
-        return False
-    for ch in s[1:]:
-        if (
-            ch in _DISALLOWED_IDENT_CHARS
-            or ch in _UNICODE_SPACES
-            or ch in _NEWLINES
-            or _is_disallowed_literal(ch)
-        ):
-            return False
-    return True
+    return _BARE_IDENT_RE.match(s) is not None
 
 
-def _escape_char(ch: str) -> str | None:
-    """Return the escaped form of ``ch`` or ``None`` if it may stay literal.
-
-    Raises:
-        ValueError: If ``ch`` is a lone UTF-16 surrogate (U+D800-DFFF),
-            which cannot be represented in KDL even via ``\\u{...}``.
-    """
+def _replace_escape_match(m: re.Match[str]) -> str:
+    """Return the escaped form for a matched character in a KDL string."""
+    ch = m.group(0)
     simple = _SIMPLE_ESCAPES.get(ch)
     if simple is not None:
         return simple
@@ -131,16 +79,7 @@ def _escape_char(ch: str) -> str | None:
             f"Cannot serialize surrogate code point U+{cp:04X}; "
             "KDL strings must be Unicode Scalar Values."
         )
-    # C0 controls (other than tab/LF/CR already handled above) and DEL.
-    if (0x00 <= cp <= 0x1F) or cp == 0x7F:
-        return f"\\u{{{cp:X}}}"
-    # Bi-directional control characters (KDL 2.0 §3.19).
-    if cp in (0x200E, 0x200F) or 0x202A <= cp <= 0x202E or 0x2066 <= cp <= 0x2069:
-        return f"\\u{{{cp:X}}}"
-    # ZWNBSP / BOM anywhere except the very first code point of a document.
-    if cp == 0xFEFF:
-        return f"\\u{{{cp:X}}}"
-    return None
+    return f"\\u{{{cp:X}}}"
 
 
 def _escape_quoted(s: str) -> str:
@@ -149,12 +88,9 @@ def _escape_quoted(s: str) -> str:
     The string must not contain literal newlines; newline characters are
     emitted via the ``\\n`` escape.
     """
-    out: list[str] = ['"']
-    for ch in s:
-        esc = _escape_char(ch)
-        out.append(esc if esc is not None else ch)
-    out.append('"')
-    return "".join(out)
+    if _NEEDS_ESCAPE_RE.search(s) is None:
+        return f'"{s}"'
+    return f'"{_NEEDS_ESCAPE_RE.sub(_replace_escape_match, s)}"'
 
 
 def _serialize_multiline(s: str, depth: int, indent_str: str) -> str:
@@ -170,15 +106,12 @@ def _serialize_multiline(s: str, depth: int, indent_str: str) -> str:
     lines = s.split("\n")
     body_lines: list[str] = []
     for line in lines:
-        esc_buf: list[str] = []
-        for ch in line:
-            esc = _escape_char(ch)
-            esc_buf.append(esc if esc is not None else ch)
-        rendered = "".join(esc_buf)
-        if rendered == "":
+        if not line:
             body_lines.append("")
+        elif _NEEDS_ESCAPE_RE.search(line) is None:
+            body_lines.append(inner + line)
         else:
-            body_lines.append(inner + rendered)
+            body_lines.append(inner + _NEEDS_ESCAPE_RE.sub(_replace_escape_match, line))
     body = "\n".join(body_lines)
     return f'"""\n{body}\n{closer}"""'
 
