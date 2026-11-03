@@ -122,6 +122,31 @@ class TestNodeDocument:
         node = KdlNode.from_cst(cst.nodes[0])
         assert node.document is None
 
+    def test_remove_child_clears_document_recursively(self, nav_doc: KdlDocument) -> None:
+        app = nav_doc.nodes[0]
+        plugins = app.children[3]
+        assert plugins.name == "plugins"
+        for desc in plugins.iter_descendants():
+            assert desc.document is nav_doc
+
+        removed = app.remove_child(3)
+        assert removed is plugins
+        assert removed.parent is None
+        assert removed.document is None
+        for desc in removed.iter_descendants():
+            assert desc.document is None
+        # Internal parent links inside the detached subtree remain intact
+        auth_plugin = removed.children[0]
+        assert auth_plugin.parent is removed
+        assert auth_plugin.children[0].parent is auth_plugin
+        assert auth_plugin.children[0].root is removed
+
+        # Re-attaching wires document back across all descendants
+        app.add_child(removed)
+        assert removed.document is nav_doc
+        for desc in removed.iter_descendants():
+            assert desc.document is nav_doc
+
 
 # ---------------------------------------------------------------------------
 # KdlNode.depth()

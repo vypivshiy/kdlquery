@@ -7,7 +7,7 @@ from .types import CSTDocument, Span
 from .reader import KdlNode, _EMPTY_SPAN
 
 
-@dataclass
+@dataclass(slots=True)
 class KdlDocument:
     """Owns a parsed KDL document tree and provides structural queries.
 

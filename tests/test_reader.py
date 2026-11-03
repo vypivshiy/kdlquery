@@ -279,3 +279,111 @@ root {
         assert child["args"] == ("arg",)
         assert child["props"] == {"key": "val"}
         assert child["children"] == []
+
+
+# ---------------------------------------------------------------------------
+# Unified parse_into / Walker.walk_document & Reader slots
+# ---------------------------------------------------------------------------
+
+
+class TestUnifiedParseIntoAndWalker:
+    SAMPLE_KDL = """\
+app "service" {
+    server "primary" port=8080
+    server "secondary" port=8081
+}
+meta version="1.0"
+"""
+
+    def test_parse_into_str_kdldoc_cstdoc_produce_identical_output(self) -> None:
+        kdl_doc = parse(self.SAMPLE_KDL)
+        cst_doc = KDL2CSTParser().parse(self.SAMPLE_KDL)
+
+        res_str, diag_str = parse_into(self.SAMPLE_KDL, DictReader())
+        res_kdl, diag_kdl = parse_into(kdl_doc, DictReader())
+        res_cst, diag_cst = parse_into(cst_doc, DictReader())
+
+        assert res_str == res_kdl == res_cst
+        assert diag_str == diag_kdl == diag_cst == []
+
+    def test_node_document_and_navigation_populated_in_reader(self) -> None:
+        from kdlquery.types import CSTDocument
+
+        sources: list[str | KdlDocument | CSTDocument] = [
+            self.SAMPLE_KDL,
+            parse(self.SAMPLE_KDL),
+            KDL2CSTParser().parse(self.SAMPLE_KDL),
+            KdlDocument(
+                nodes=[
+                    KdlNode.create(
+                        "app",
+                        args=["service"],
+                        children=[
+                            KdlNode.create("server", args=["primary"], properties={"port": 8080}),
+                            KdlNode.create("server", args=["secondary"], properties={"port": 8081}),
+                        ],
+                    ),
+                    KdlNode.create("meta", properties={"version": "1.0"}),
+                ]
+            ),
+        ]
+
+        for source in sources:
+            visited: list[tuple[str, bool, int, int]] = []
+
+            class NavCheckReader(DictReader):
+                def on_node(self, node: KdlNode, ctx: WalkContext[Node]) -> Node:
+                    visited.append(
+                        (
+                            node.name,
+                            isinstance(node.document, KdlDocument),
+                            node.index(),
+                            len(node.siblings()),
+                        )
+                    )
+                    return super().on_node(node, ctx)
+
+            parse_into(source, NavCheckReader())
+            assert visited == [
+                ("app", True, 0, 2),
+                ("server", True, 0, 2),
+                ("server", True, 1, 2),
+                ("meta", True, 1, 2),
+            ]
+
+    def test_walker_walk_document_accepts_all_three_types(self) -> None:
+        from kdlquery import Walker
+
+        for src in (
+            "a 1\nb 2",
+            parse("a 1\nb 2"),
+            KDL2CSTParser().parse("a 1\nb 2"),
+        ):
+            walker = Walker(DictReader())
+            nodes, diags = walker.walk_document(src)
+            assert len(nodes) == 2
+            assert nodes[0]["name"] == "a"
+            assert nodes[1]["name"] == "b"
+            assert diags == []
+
+    def test_reader_dataclasses_use_slots(self) -> None:
+        from kdlquery import DiagnosticCollector, ReadDiagnostic, Severity, Walker
+        from kdlquery.types import Position, Span
+
+        span = Span(Position(0, 1, 1), Position(1, 1, 2))
+        diag = ReadDiagnostic(message="err", severity=Severity.ERROR, span=span)
+        collector = DiagnosticCollector()
+        node = KdlNode.create("test")
+        walker = Walker(DictReader())
+        ctx = WalkContext(
+            node=node,
+            parent=None,
+            index=0,
+            depth=0,
+            _walker=walker,
+            _collector=collector,
+        )
+
+        assert not hasattr(diag, "__dict__")
+        assert not hasattr(collector, "__dict__")
+        assert not hasattr(ctx, "__dict__")

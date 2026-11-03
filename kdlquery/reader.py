@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
@@ -41,7 +41,7 @@ class Severity(str, Enum):
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class ReadDiagnostic:
     """A diagnostic message produced during tree reading.
 
@@ -71,7 +71,7 @@ class ReadDiagnostic:
 # ---------------------------------------------------------------------------
 
 
-@dataclass
+@dataclass(slots=True)
 class DiagnosticCollector:
     """Collects diagnostic messages during tree walking with path tracking.
 
@@ -182,7 +182,7 @@ class DiagnosticCollector:
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class _Keyword:
     """Marker wrapping a raw KDL literal (e.g. ``#true``, ``#null``, ``#inf``).
 
@@ -199,7 +199,7 @@ class _Keyword:
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class KdlValue:
     """A typed value extracted from a KDL node entry.
 
@@ -278,12 +278,28 @@ class KdlValue:
         return value_to_kdl(self, indent=indent, indent_str=indent_str)
 
 
+def _coerce_value(
+    val: KdlValue | Any,
+    type_annotation: str | None = None,
+) -> KdlValue:
+    """Coerce a raw Python primitive or KdlValue into a KdlValue."""
+    if isinstance(val, KdlValue):
+        if type_annotation is not None:
+            return KdlValue(
+                value=val.value,
+                span=val.span,
+                type_annotation=type_annotation,
+            )
+        return val
+    return KdlValue.create(val, type_annotation=type_annotation)
+
+
 # ---------------------------------------------------------------------------
 # KdlNode
 # ---------------------------------------------------------------------------
 
 
-@dataclass
+@dataclass(slots=True)
 class KdlNode:
     """A node in a parsed KDL document tree.
 
@@ -391,31 +407,38 @@ class KdlNode:
         cls,
         name: str,
         *,
-        args: list[KdlValue] | tuple[KdlValue, ...] | None = None,
-        properties: dict[str, KdlValue] | None = None,
-        children: list[KdlNode] | tuple[KdlNode, ...] | None = None,
+        args: Iterable[KdlValue | Any] | None = None,
+        properties: Mapping[str, KdlValue | Any] | None = None,
+        children: Iterable[KdlNode] | None = None,
         type_annotation: str | None = None,
     ) -> KdlNode:
         """Build a synthetic KdlNode without a CST.
 
         Args:
-            name: Node name (must be a non-empty KDL string).
-            args: Optional iterable of positional KdlValue arguments.
+            name (str): Node name (must be a non-empty KDL string).
+            args (Iterable[KdlValue | Any] | None): Optional iterable of
+                positional KdlValue or raw Python primitive arguments.
                 Copied into a fresh list.
-            properties: Optional mapping of property name to KdlValue.
+            properties (Mapping[str, KdlValue | Any] | None): Optional
+                mapping of property name to KdlValue or raw Python primitive.
                 Copied into a fresh dict.
-            children: Optional iterable of child KdlNode. Copied into a
-                fresh list; their ``parent`` is wired to the new node.
-            type_annotation: Optional raw node type annotation.
+            children (Iterable[KdlNode] | None): Optional iterable of child
+                KdlNode. Copied into a fresh list; their ``parent`` is wired
+                to the new node.
+            type_annotation (str | None): Optional raw node type annotation.
 
         Returns:
-            A new KdlNode with parent references wired for children.
+            KdlNode: A new KdlNode with parent references wired for children.
         """
         node = cls(
             name=name,
             type_annotation=type_annotation,
-            args=list(args) if args else [],
-            properties=dict(properties) if properties else {},
+            args=[_coerce_value(a) for a in args] if args else [],
+            properties=(
+                {k: _coerce_value(v) for k, v in properties.items()}
+                if properties
+                else {}
+            ),
             children=list(children) if children else [],
         )
         node._wire_parents()
@@ -466,32 +489,52 @@ class KdlNode:
         """Remove and return the child at ``index``.
 
         Args:
-            index: Zero-based position of the child to remove.
+            index (int): Zero-based position of the child to remove.
 
         Returns:
-            The removed KdlNode. Its ``parent`` is cleared.
+            KdlNode: The removed KdlNode. Its ``parent`` and ``document``
+                back-references (including all descendants) are cleared.
         """
         child = self.children.pop(index)
         child.parent = None
         child._document = None
+        for descendant in child.iter_descendants():
+            descendant._document = None
         return child
 
-    def add_arg(self, value: KdlValue) -> None:
+    def add_arg(
+        self,
+        value: KdlValue | Any,
+        *,
+        type_annotation: str | None = None,
+    ) -> None:
         """Append a positional argument.
 
         Args:
-            value: The KdlValue to append to :attr:`args`.
+            value (KdlValue | Any): The KdlValue or raw Python primitive to
+                append to :attr:`args`.
+            type_annotation (str | None): Optional raw type annotation like
+                ``"(u8)"``.
         """
-        self.args.append(value)
+        self.args.append(_coerce_value(value, type_annotation=type_annotation))
 
-    def set_prop(self, key: str, value: KdlValue) -> None:
+    def set_prop(
+        self,
+        key: str,
+        value: KdlValue | Any,
+        *,
+        type_annotation: str | None = None,
+    ) -> None:
         """Set or replace a named property.
 
         Args:
-            key: Property name.
-            value: The KdlValue to associate with ``key``.
+            key (str): Property name.
+            value (KdlValue | Any): The KdlValue or raw Python primitive to
+                associate with ``key``.
+            type_annotation (str | None): Optional raw type annotation like
+                ``"(u8)"``.
         """
-        self.properties[key] = value
+        self.properties[key] = _coerce_value(value, type_annotation=type_annotation)
 
     def remove_prop(self, key: str) -> bool:
         """Remove a named property.
@@ -596,13 +639,7 @@ class KdlNode:
 
     @property
     def document(self) -> KdlDocument | None:
-        """Return the owning :class:`KdlDocument`, if any.
-
-        Only set when the node was created via
-        :meth:`KdlDocument.from_cst`.  Nodes created by
-        :meth:`KdlNode.from_cst` directly or by :class:`Walker`
-        have no document reference.
-        """
+        """Return the owning :class:`KdlDocument`, if any."""
         return self._document  # type: ignore[no-any-return]
 
     def depth(self) -> int:
@@ -803,7 +840,7 @@ class KdlNode:
 T_node = TypeVar("T_node")
 
 
-@dataclass
+@dataclass(slots=True)
 class WalkContext(Generic[T_node]):
     """Context passed to Reader callbacks during tree walking.
 
@@ -1107,26 +1144,40 @@ class Walker(Generic[T_node]):
 
     def walk_document(
         self,
-        document: CSTDocument,
+        document: CSTDocument | KdlDocument | str,
     ) -> tuple[list[T_node], list[ReadDiagnostic]]:
-        """Walk an entire CST document through the Reader.
+        """Walk an entire KDL document through the Reader.
 
-        Converts all top-level CST nodes to KdlNode instances and
-        traverses them recursively.
+        Accepts a raw KDL source string, a :class:`KdlDocument`, or a
+        :class:`CSTDocument`, ensuring document back-references are
+        wired on all nodes before traversal.
 
         Args:
-            document: The CST document produced by the parser.
+            document (CSTDocument | KdlDocument | str): The KDL source
+                string, KdlDocument, or CSTDocument to traverse.
 
         Returns:
-            A tuple of ``(root_results, diagnostics)`` where
-            ``root_results`` is a list of processed root-level nodes
-            and ``diagnostics`` is a list of collected diagnostics.
+            tuple[list[T_node], list[ReadDiagnostic]]: A tuple of
+                ``(root_results, diagnostics)`` where ``root_results`` is
+                a list of processed root-level nodes and ``diagnostics``
+                is a list of collected diagnostics.
         """
+        from .document import KdlDocument
+
+        if isinstance(document, str):
+            from . import parse
+
+            kdl_doc = parse(document)
+        elif isinstance(document, CSTDocument):
+            kdl_doc = KdlDocument.from_cst(document)
+        else:
+            kdl_doc = document
+            kdl_doc._wire_document_refs()
+
         collector = DiagnosticCollector()
-        children = tuple(KdlNode.from_cst(n) for n in document.nodes)
         results: list[T_node] = []
 
-        for i, child in enumerate(children):
+        for i, child in enumerate(kdl_doc.nodes):
             self.walk(
                 node=child,
                 parent=None,
@@ -1145,26 +1196,28 @@ class Walker(Generic[T_node]):
 
 
 def parse_into(
-    document: CSTDocument,
+    document: CSTDocument | KdlDocument | str,
     reader: Reader[T_node, R],
     *,
     strict: bool = False,
 ) -> tuple[R, list[ReadDiagnostic]]:
-    """Parse a CST document through a Reader in a single call.
+    """Parse a KDL document through a Reader in a single call.
 
     Convenience function that creates a Walker, walks the document,
     and finalizes the result.
 
     Args:
-        document: The CST document produced by ``KDL2CSTParser.parse``.
-        reader: The Reader implementation to process the tree.
-        strict: If ``True``, catch exceptions in ``on_node`` and call
-            ``error_node`` instead of raising.
+        document (CSTDocument | KdlDocument | str): A KDL 2.0 source
+            string, a :class:`KdlDocument`, or a :class:`CSTDocument`.
+        reader (Reader[T_node, R]): The Reader implementation to process
+            the tree.
+        strict (bool): If ``True``, catch exceptions in ``on_node`` and
+            call ``error_node`` instead of raising.
 
     Returns:
-        A tuple of ``(final_result, diagnostics)`` where
-        ``final_result`` is the value returned by ``reader.finalize``
-        and ``diagnostics`` is the list of collected diagnostics.
+        tuple[R, list[ReadDiagnostic]]: A tuple of ``(final_result, diagnostics)``
+            where ``final_result`` is the value returned by ``reader.finalize``
+            and ``diagnostics`` is the list of collected diagnostics.
     """
     walker = Walker(reader, strict=strict)
     nodes, diagnostics = walker.walk_document(document)

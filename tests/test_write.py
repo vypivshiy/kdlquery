@@ -83,6 +83,36 @@ class TestKdlNodeCreate:
         assert len(args) == 1
         assert len(n.args) == 2
 
+    def test_create_with_raw_primitives(self) -> None:
+        n = KdlNode.create(
+            "server",
+            args=["primary", 1, 2.5, True, None],
+            properties={"port": 8080, "tls": False, "tag": None, "host": "localhost"},
+        )
+        assert [a.value for a in n.args] == ["primary", 1, 2.5, True, None]
+        assert all(isinstance(a, KdlValue) for a in n.args)
+        assert n.get_prop("port") == 8080
+        assert n.get_prop("tls") is False
+        assert n.get_prop("tag") is None
+        assert n.has_prop("tag") is True
+        assert n.get_prop("host") == "localhost"
+        assert all(isinstance(v, KdlValue) for v in n.properties.values())
+
+    def test_create_mixed_primitives_and_kdlvalue(self) -> None:
+        typed_val = KdlValue.create(8080, type_annotation="(u16)")
+        n = KdlNode.create(
+            "server",
+            args=["primary", KdlValue.create(1, type_annotation="(u8)")],
+            properties={"port": typed_val, "tls": True},
+        )
+        assert n.args[0].value == "primary"
+        assert n.args[0].type_annotation is None
+        assert n.args[1].value == 1
+        assert n.args[1].type_annotation == "(u8)"
+        assert n.properties["port"] is typed_val
+        assert n.properties["tls"].value is True
+        assert n.to_kdl() == "server primary (u8) 1 port=(u16) 8080 tls=#true"
+
 
 class TestMutation:
     def test_add_child_wires_parent(self) -> None:
@@ -128,10 +158,37 @@ class TestMutation:
         assert removed.parent is None
         assert len(parent.children) == 1
 
+    def test_remove_child_clears_document_on_descendants(self) -> None:
+        doc = parse("root { branch { leaf { deep } } }")
+        root = doc.nodes[0]
+        branch = root.children[0]
+        leaf = branch.children[0]
+        deep = leaf.children[0]
+        assert branch.document is doc
+        assert leaf.document is doc
+        assert deep.document is doc
+
+        removed = root.remove_child(0)
+        assert removed is branch
+        assert removed.parent is None
+        assert removed.document is None
+        assert leaf.document is None
+        assert deep.document is None
+        assert root.document is doc
+
     def test_add_arg(self) -> None:
         n = KdlNode.create("x")
         n.add_arg(KdlValue.create(True))
         assert n.get_arg(0) is True
+
+    def test_add_arg_raw_primitives_and_type_annotation(self) -> None:
+        n = KdlNode.create("x")
+        n.add_arg("secondary")
+        n.add_arg(42, type_annotation="(u8)")
+        n.add_arg(KdlValue.create(100), type_annotation="(i32)")
+        assert [a.value for a in n.args] == ["secondary", 42, 100]
+        assert [a.type_annotation for a in n.args] == [None, "(u8)", "(i32)"]
+        assert n.to_kdl() == "x secondary (u8) 42 (i32) 100"
 
     def test_set_prop_add_and_replace(self) -> None:
         n = KdlNode.create("x")
@@ -139,6 +196,23 @@ class TestMutation:
         assert n.get_prop("k") == 1
         n.set_prop("k", KdlValue.create(2))
         assert n.get_prop("k") == 2
+
+    def test_set_prop_raw_primitives_and_type_annotation(self) -> None:
+        n = KdlNode.create("server")
+        n.set_prop("port", 8080, type_annotation="(u16)")
+        n.set_prop("tls", True)
+        n.set_prop("extra", None)
+        n.set_prop("override", KdlValue.create("val"), type_annotation="(str)")
+        assert n.properties["port"].value == 8080
+        assert n.properties["port"].type_annotation == "(u16)"
+        assert n.properties["tls"].value is True
+        assert n.properties["extra"].value is None
+        assert n.properties["override"].value == "val"
+        assert n.properties["override"].type_annotation == "(str)"
+        assert (
+            n.to_kdl()
+            == "server port=(u16) 8080 tls=#true extra=#null override=(str) val"
+        )
 
     def test_remove_prop(self) -> None:
         n = KdlNode.create("x")
@@ -411,3 +485,28 @@ class TestMigrationExample:
         assert reparsed.children[0].name == "@request"
         assert reparsed.children[1].name == "@check"
         assert reparsed.children[1].children[2].get_arg(0) is False
+
+
+class TestSlottedTreeModel:
+    def test_tree_classes_use_slots(self) -> None:
+        doc = parse("node 1 key=2")
+        node = doc.nodes[0]
+        val = node.args[0]
+        kw = _Keyword("#true")
+
+        assert not hasattr(doc, "__dict__")
+        assert not hasattr(node, "__dict__")
+        assert not hasattr(val, "__dict__")
+        assert not hasattr(kw, "__dict__")
+
+        with pytest.raises(AttributeError):
+            doc.extra_attr = 1  # type: ignore[attr-defined]
+        with pytest.raises(AttributeError):
+            node.extra_attr = 1  # type: ignore[attr-defined]
+
+    def test_direct_attribute_mutation_works_with_slots(self) -> None:
+        doc = parse("old_name 1")
+        node = doc.nodes[0]
+        node.name = "new_name"
+        node.type_annotation = "(custom)"
+        assert doc.to_kdl() == "(custom) new_name 1\n"
